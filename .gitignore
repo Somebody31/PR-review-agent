@@ -1,0 +1,34 @@
+# Dependencies
+node_modules/
+.pnpm-store/
+
+# Build
+dist/
+build/
+*.tsbuildinfo
+.next/
+out/
+
+# Env / secrets
+.env
+.env.local
+.env.*.local
+*.pem
+!*.pem.example
+
+# Logs / OS
+logs/
+*.log
+.DS_Store
+Thumbs.db
+
+# IDE / tooling
+.idea/
+.vscode/
+*.swp
+coverage/
+.turbo/
+
+# Test / cache
+.cache/
+tmp/

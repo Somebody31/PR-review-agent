@@ -1,0 +1,36 @@
+# Local data spine: Postgres + pgvector, Redis (BullMQ).
+# Does NOT start the local Qwen embedding server — run that separately.
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: pr-review-postgres
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_USER: prreview
+      POSTGRES_PASSWORD: prreview
+      POSTGRES_DB: prreview
+    volumes:
+      - pr_review_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U prreview -d prreview"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    container_name: pr-review-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - pr_review_redis:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  pr_review_pgdata:
+  pr_review_redis:
