@@ -7,3 +7,10 @@ export {
   reviewJobId,
   type ReviewQueue,
 } from "./queue.js";
+export {
+  withRetry,
+  isRetryableHttpError,
+  isRetryableHttpStatus,
+  computeBackoffMs,
+  type WithRetryOptions,
+} from "./retry.js";

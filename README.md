@@ -56,9 +56,21 @@ Local Qwen embed server is **not** in docker-compose — start it separately bef
 | **3** | Context pipeline | **Done** |
 | **4** | Agents & LangGraph | **Done** |
 | **5** | Memory & RAG | **Done** (chunk/hash, local Qwen embed, incremental index, vector retrieve → `repoContext`) |
-| 6+ | Post → HITL → CI | Not started |
+| **6** | Posting & reliability | **Done** (`withRetry`, GitHub PR review post, idempotent by head SHA) |
+| 7+ | Events, budget, HITL, CI | Not started |
 
-**Next:** Phase **6** — post GitHub review, retry/timeout helpers, idempotent post.
+**Next:** Phase **7** — agent events, BudgetGuard, REST read API (HITL still later).
+
+### Phase 6 notes
+
+- Worker posts a GitHub PR review **only** when outcome is `auto_post`.
+- `AUTO_POST_ENABLED` still defaults to **false** (aggregator forces `hitl_queue` until enabled).
+- Post uses `withRetry` (exponential backoff + jitter) on retryable HTTP errors.
+- Idempotent: `findPostedReviewByHead` skips a second post for the same owner/repo/PR/head SHA and reuses `github_review_id`.
+- `github_review_id` is written via `setGithubReviewId` immediately after a successful post (before `finishReview`) so a crash does not re-post duplicates.
+- Review body groups findings by severity; inline comments only when `filePath` + `lineStart` appear in the PR patch (else body-only listing).
+- If GitHub rejects inline comments, the post falls back to a body-only review so findings still land on the PR.
+- `REQUEST_CHANGES` only for CRITICAL/HIGH; otherwise `COMMENT`.
 
 ### Phase 5 notes
 

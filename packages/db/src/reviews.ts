@@ -1,4 +1,4 @@
-import { eq } from "drizzle-orm";
+import { and, eq, isNotNull } from "drizzle-orm";
 import type { Finding, ReviewOutcome } from "@pr-review/shared";
 import type { Database } from "./client.js";
 import { findings, prReviews } from "./schema.js";
@@ -20,6 +20,12 @@ export type FinishReviewInput = {
   costUsd?: string;
   errorMessage?: string;
   githubReviewId?: string;
+};
+
+/** A prior review for the same head that already posted to GitHub. */
+export type PostedReviewByHead = {
+  id: string;
+  githubReviewId: string;
 };
 
 /**
@@ -67,6 +73,25 @@ export async function finishReview(
       costUsd: input.costUsd,
       errorMessage: input.errorMessage,
       githubReviewId: input.githubReviewId,
+      updatedAt: new Date(),
+    })
+    .where(eq(prReviews.id, reviewId));
+}
+
+/**
+ * Persist github_review_id as soon as GitHub accepts the review.
+ * Written before finishReview so a crash between post and finish still
+ * blocks duplicate posts on retry (findPostedReviewByHead).
+ */
+export async function setGithubReviewId(
+  db: Database,
+  reviewId: string,
+  githubReviewId: string,
+): Promise<void> {
+  await db
+    .update(prReviews)
+    .set({
+      githubReviewId,
       updatedAt: new Date(),
     })
     .where(eq(prReviews.id, reviewId));
@@ -123,4 +148,45 @@ export function statusForOutcome(outcome: ReviewOutcome): "completed" | "hitl_pe
     return "hitl_pending";
   }
   return "completed";
+}
+
+/**
+ * Find an already-posted GitHub review for the same PR head SHA.
+ * Used so re-runs do not create duplicate PR reviews on GitHub.
+ */
+export async function findPostedReviewByHead(
+  db: Database,
+  input: {
+    owner: string;
+    repo: string;
+    prNumber: number;
+    headSha: string;
+  },
+): Promise<PostedReviewByHead | null> {
+  const rows = await db
+    .select({
+      id: prReviews.id,
+      githubReviewId: prReviews.githubReviewId,
+    })
+    .from(prReviews)
+    .where(
+      and(
+        eq(prReviews.owner, input.owner),
+        eq(prReviews.repo, input.repo),
+        eq(prReviews.prNumber, input.prNumber),
+        eq(prReviews.headSha, input.headSha),
+        isNotNull(prReviews.githubReviewId),
+      ),
+    )
+    .limit(1);
+
+  const row = rows[0];
+  if (!row || !row.githubReviewId) {
+    return null;
+  }
+
+  return {
+    id: row.id,
+    githubReviewId: row.githubReviewId,
+  };
 }

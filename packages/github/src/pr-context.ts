@@ -22,7 +22,7 @@ export type PrContext = {
   files: PrFile[];
 };
 
-/** Minimal Octokit surface used by fetchPrContext (easy to mock in tests). */
+/** Minimal Octokit surface for PR fetch only (easy to mock in tests). Post uses ReviewsOctokit. */
 export type PullsOctokit = {
   rest: {
     pulls: {

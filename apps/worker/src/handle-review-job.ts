@@ -1,11 +1,13 @@
 import { runReviewGraph } from "@pr-review/agents";
-import { createLogger, loadConfig } from "@pr-review/core";
+import { createLogger, loadConfig, withRetry } from "@pr-review/core";
 import {
   failReview,
+  findPostedReviewByHead,
   finishReview,
   getDb,
   insertFindings,
   insertReviewRunning,
+  setGithubReviewId,
   statusForOutcome,
   type Database,
 } from "@pr-review/db";
@@ -13,6 +15,9 @@ import {
   createGithubApp,
   fetchPrContext,
   getInstallationOctokit,
+  postPullRequestReview,
+  type PrFile,
+  type ReviewsOctokit,
 } from "@pr-review/github";
 import {
   buildRetrievalQuery,
@@ -21,12 +26,13 @@ import {
   retrieveContext,
   type EmbedConfig,
 } from "@pr-review/memory";
-import type { ReviewJob } from "@pr-review/shared";
+import type { ReviewJob, ReviewResult } from "@pr-review/shared";
 
 const logger = createLogger({ name: "worker" });
 
 /**
  * Load PR context, index/retrieve RAG context, run LangGraph, persist findings.
+ * Posts to GitHub only when outcome is auto_post (idempotent per head SHA).
  */
 export async function handleReviewJob(job: ReviewJob): Promise<void> {
   const config = loadConfig();
@@ -110,11 +116,23 @@ export async function handleReviewJob(job: ReviewJob): Promise<void> {
     logger.info({ reviewId, agentTimings: graphOutput.agentTimings }, "agent timings");
 
     await insertFindings(db, reviewId, result.findings);
+
+    // Only post when aggregator chose auto_post (requires AUTO_POST_ENABLED + confidence)
+    const githubReviewId = await maybePostGithubReview({
+      db,
+      octokit,
+      job,
+      result,
+      reviewId,
+      files: context.files,
+    });
+
     await finishReview(db, reviewId, {
       status: statusForOutcome(result.outcome),
       overallConfidence: result.overallConfidence,
       outcome: result.outcome,
       summaryMarkdown: result.summaryMarkdown,
+      githubReviewId,
     });
 
     logger.info(
@@ -123,6 +141,7 @@ export async function handleReviewJob(job: ReviewJob): Promise<void> {
         findingCount: result.findings.length,
         outcome: result.outcome,
         overallConfidence: result.overallConfidence,
+        githubReviewId,
       },
       "review completed",
     );
@@ -132,6 +151,69 @@ export async function handleReviewJob(job: ReviewJob): Promise<void> {
     logger.error({ reviewId, err: message }, "review failed");
     throw error;
   }
+}
+
+/**
+ * Post a GitHub review only for auto_post outcomes.
+ * Skips the API call when the same head SHA already has a stored github_review_id.
+ */
+async function maybePostGithubReview(args: {
+  db: Database;
+  octokit: ReviewsOctokit;
+  job: ReviewJob;
+  result: ReviewResult;
+  reviewId: string;
+  files: PrFile[];
+}): Promise<string | undefined> {
+  if (args.result.outcome !== "auto_post") {
+    return undefined;
+  }
+
+  const existing = await findPostedReviewByHead(args.db, {
+    owner: args.job.owner,
+    repo: args.job.repo,
+    prNumber: args.job.prNumber,
+    headSha: args.job.headSha,
+  });
+
+  if (existing) {
+    logger.info(
+      {
+        reviewId: args.reviewId,
+        existingReviewId: existing.id,
+        githubReviewId: existing.githubReviewId,
+      },
+      "skipping GitHub post; already posted for this head",
+    );
+    return existing.githubReviewId;
+  }
+
+  const posted = await withRetry(
+    () =>
+      postPullRequestReview(args.octokit, {
+        owner: args.job.owner,
+        repo: args.job.repo,
+        prNumber: args.job.prNumber,
+        headSha: args.job.headSha,
+        findings: args.result.findings,
+        summaryMarkdown: args.result.summaryMarkdown,
+        files: args.files,
+      }),
+    {
+      maxAttempts: 3,
+      baseDelayMs: 200,
+      maxDelayMs: 5000,
+    },
+  );
+
+  // Persist id before finishReview so a crash still blocks duplicate posts
+  await setGithubReviewId(args.db, args.reviewId, posted.githubReviewId);
+
+  logger.info(
+    { reviewId: args.reviewId, githubReviewId: posted.githubReviewId },
+    "GitHub review posted",
+  );
+  return posted.githubReviewId;
 }
 
 /**

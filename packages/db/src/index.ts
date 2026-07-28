@@ -6,6 +6,9 @@ export {
   failReview,
   insertFindings,
   statusForOutcome,
+  findPostedReviewByHead,
+  setGithubReviewId,
   type NewPrReviewInput,
   type FinishReviewInput,
+  type PostedReviewByHead,
 } from "./reviews.js";

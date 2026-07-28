@@ -7,6 +7,7 @@ export {
   createGithubApp,
   getInstallationOctokit,
   normalizePrivateKey,
+  type InstallationOctokit,
 } from "./auth.js";
 export {
   fetchPrContext,
@@ -16,3 +17,17 @@ export {
   type PrFile,
   type PullsOctokit,
 } from "./pr-context.js";
+export {
+  postPullRequestReview,
+  buildReviewBody,
+  mapFindingsToInlineComments,
+  decideReviewEvent,
+  parsePatchRightLines,
+  collectCommentableLines,
+  type ReviewsOctokit,
+  type PostPullRequestReviewInput,
+  type PostPullRequestReviewResult,
+  type InlineReviewComment,
+  type GithubReviewEvent,
+  type DiffFileForComments,
+} from "./post-review.js";
