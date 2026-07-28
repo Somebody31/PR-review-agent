@@ -19,6 +19,7 @@ Record architectural and product decisions here. Newest first within each sectio
 | ADR-008 | Local Qwen3 embeddings | Accepted |
 | ADR-009 | Dashboard deferred; REST-first HITL (no day-one Next.js) | Accepted |
 | ADR-010 | Beginner-readable TypeScript style | Accepted |
+| ADR-011 | Do not overbuild | Accepted |
 
 ---
 
@@ -196,9 +197,35 @@ Nodes are plain functions. No class-based agents. Checkpointer optional; BullMQ 
 
 ---
 
+## ADR-011 — Do not overbuild
+
+**Date:** 2026-07-28  
+**Status:** Accepted  
+
+**Context:** Easy to scaffold unused packages, abstractions “for later,” and multi-phase work in one PR. That slows shipping and fights beginner readability (ADR-010).
+
+**Decision:** Only build what the **current step’s green gate** needs.
+
+Rules:
+
+1. One phase/step at a time; stop when the gate passes.
+2. No empty packages or stub modules for future phases.
+3. No abstractions for a second use-case that does not exist yet.
+4. Prefer extending an existing file over a new package.
+5. Do not wire GitHub/LLM/RAG/HITL until that phase starts.
+6. Docs: log real decisions; do not invent parallel design systems.
+
+**Consequences:**
+
+- Smaller diffs; clearer reviews.
+- May rename/move code when a second real need appears (acceptable).
+
+---
+
 ## Change log
 
 | Date | Change |
 |------|--------|
 | 2026-07-26 | Initial architecture + implementation plan docs; ADRs 001–006 accepted for TypeScript build |
 | 2026-07-28 | Phase 0 scaffold; ADR-004-bis LangGraph; ADR-007 DeepSeek Flash; ADR-008 local Qwen3; ADR-009 REST-first (no Next.js); ADR-010 code style |
+| 2026-07-28 | ADR-011 do not overbuild; phase status check |

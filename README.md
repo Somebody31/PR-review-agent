@@ -48,7 +48,16 @@ Local Qwen embed server is **not** in docker-compose — start it separately bef
 
 ## Status
 
-Phase 0 foundations in progress (monorepo scaffold, config, shared contracts).
+| Phase | Name | Status |
+|-------|------|--------|
+| **0** | Foundations | **Done** (code gates: install / typecheck / tests) |
+| 1 | Data spine | Not started |
+| 2 | Ingress & queue | Not started |
+| 3+ | Context → agents → … | Not started |
+
+**Next:** Step **1.1** — `packages/db` Drizzle connect + migrate + `SELECT 1` (only that; no overbuild).
+
+Docker Compose green gate: run `docker compose up -d` where Docker is available (not verified on all machines).
 
 ## License
 
