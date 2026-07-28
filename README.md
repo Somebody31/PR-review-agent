@@ -9,10 +9,6 @@ GitHub PR → verify webhook → queue → LangGraph (four specialists: security
 **Orchestration:** LangGraph.js  
 **UI:** deferred (REST-first HITL; no Next.js in MVP)
 
-## Docs
-
-Planning and ADRs live in local `docs/` (**not tracked in git** — do not push).
-
 ## Monorepo layout
 
 ```

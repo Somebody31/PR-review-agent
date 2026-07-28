@@ -33,5 +33,7 @@ coverage/
 .cache/
 tmp/
 
-# Local-only planning / ADRs — do not commit or push
+# Only README.md is tracked among markdown files
+*.md
+!README.md
 docs/
