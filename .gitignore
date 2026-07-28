@@ -32,3 +32,6 @@ coverage/
 # Test / cache
 .cache/
 tmp/
+
+# Local-only planning / ADRs — do not commit or push
+docs/

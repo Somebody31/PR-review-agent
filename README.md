@@ -11,11 +11,7 @@ GitHub PR → verify webhook → queue → LangGraph (four specialists: security
 
 ## Docs
 
-| Doc | Purpose |
-|-----|---------|
-| [docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md) | Architecture plan |
-| [docs/IMPLEMENTATION.md](./docs/IMPLEMENTATION.md) | Implementation steps (phased) |
-| [docs/DECISIONS.md](./docs/DECISIONS.md) | ADRs |
+Planning and ADRs live in local `docs/` (**not tracked in git** — do not push).
 
 ## Monorepo layout
 

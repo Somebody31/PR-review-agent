@@ -1,6 +1,12 @@
 # Agent rules — PR Review Agent
 
-Follow these when changing this repo. Full ADRs: [docs/DECISIONS.md](./docs/DECISIONS.md). Build order: [docs/IMPLEMENTATION.md](./docs/IMPLEMENTATION.md).
+Follow these when changing this repo. Local ADRs/plan: `docs/` (see below).
+
+## `docs/` is local only — never push
+
+- The `docs/` folder is **gitignored**. Do **not** `git add`, commit, or push it.
+- Keep architecture notes, IMPLEMENTATION steps, and DECISIONS updates **on disk only**.
+- Do not re-add `docs/` to the remote.
 
 ## Do not overbuild (ADR-011)
 
