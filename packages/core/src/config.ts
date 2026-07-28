@@ -18,7 +18,6 @@ const envSchema = z.object({
   EMBEDDING_BASE_URL: z.string().default("http://127.0.0.1:8000/v1"),
   EMBEDDING_API_KEY: z.string().default("local"),
   EMBEDDING_MODEL: z.string().default("Qwen/Qwen3-Embedding-0.6B"),
-  EMBEDDING_DIMENSIONS: z.coerce.number().int().positive().optional(),
 
   GITHUB_APP_ID: z.string().optional().default(""),
   GITHUB_PRIVATE_KEY: z.string().optional().default(""),

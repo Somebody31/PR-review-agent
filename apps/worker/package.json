@@ -16,6 +16,7 @@
     "@pr-review/core": "workspace:*",
     "@pr-review/db": "workspace:^",
     "@pr-review/github": "workspace:^",
+    "@pr-review/memory": "workspace:^",
     "@pr-review/shared": "workspace:*",
     "bullmq": "^5.41.0"
   },

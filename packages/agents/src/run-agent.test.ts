@@ -32,6 +32,12 @@ describe("buildUserMessage", () => {
     expect(message).toContain("src/users.ts");
     expect(message).toContain("SELECT * FROM users");
   });
+
+  it("appends repository context when provided", () => {
+    const message = buildUserMessage(sqlFixtureContext, "### helpers.ts\n```\nexport const x = 1;\n```");
+    expect(message).toContain("# Repository context");
+    expect(message).toContain("helpers.ts");
+  });
 });
 
 describe("runSpecialistAgent", () => {

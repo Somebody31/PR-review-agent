@@ -19,6 +19,7 @@ packages/core     config + logger + queue helpers
 packages/db       Drizzle + pgvector schema
 packages/github   Webhook HMAC, App auth, PR context
 packages/agents   DeepSeek LLM, prompts, LangGraph graph
+packages/memory   Chunk, hash, Qwen embed, index, retrieve
 ```
 
 ## Quick start
@@ -53,11 +54,17 @@ Local Qwen embed server is **not** in docker-compose — start it separately bef
 | **1** | Data spine | **Done** |
 | **2** | Ingress & queue | **Done** |
 | **3** | Context pipeline | **Done** |
-| **4** | Agents & LangGraph | **Done** (DeepSeek structured LLM, 4 specialists, aggregate, findings in DB) |
-| 5 | Memory & RAG | Not started |
+| **4** | Agents & LangGraph | **Done** |
+| **5** | Memory & RAG | **Done** (chunk/hash, local Qwen embed, incremental index, vector retrieve → `repoContext`) |
 | 6+ | Post → HITL → CI | Not started |
 
-**Next:** Phase **5** — chunk + local Qwen embed, hybrid retrieve, inject into agents.
+**Next:** Phase **6** — post GitHub review, retry/timeout helpers, idempotent post.
+
+### Phase 5 notes
+
+- Worker indexes changed PR files when content hash changes; soft-fails if the embed server is down (diff-only review still runs).
+- Retrieved chunks are injected into specialist prompts under repository context.
+- Embeddings: OpenAI-compatible `POST {EMBEDDING_BASE_URL}/embeddings` (default Qwen3 local).
 
 ## License
 

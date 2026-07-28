@@ -12,6 +12,10 @@ const createGithubApp = vi.fn();
 const getInstallationOctokit = vi.fn();
 const fetchPrContext = vi.fn();
 const loadConfig = vi.fn();
+const indexChangedFiles = vi.fn();
+const retrieveContext = vi.fn();
+const buildRetrievalQuery = vi.fn();
+const formatRetrievedContext = vi.fn();
 
 vi.mock("@pr-review/db", () => ({
   insertReviewRunning: (...args: unknown[]) => insertReviewRunning(...args),
@@ -33,6 +37,13 @@ vi.mock("@pr-review/github", () => ({
   createGithubApp: (...args: unknown[]) => createGithubApp(...args),
   getInstallationOctokit: (...args: unknown[]) => getInstallationOctokit(...args),
   fetchPrContext: (...args: unknown[]) => fetchPrContext(...args),
+}));
+
+vi.mock("@pr-review/memory", () => ({
+  indexChangedFiles: (...args: unknown[]) => indexChangedFiles(...args),
+  retrieveContext: (...args: unknown[]) => retrieveContext(...args),
+  buildRetrievalQuery: (...args: unknown[]) => buildRetrievalQuery(...args),
+  formatRetrievedContext: (...args: unknown[]) => formatRetrievedContext(...args),
 }));
 
 vi.mock("@pr-review/core", async (importOriginal) => {
@@ -71,6 +82,10 @@ describe("handleReviewJob", () => {
     getInstallationOctokit.mockReset();
     fetchPrContext.mockReset();
     loadConfig.mockReset();
+    indexChangedFiles.mockReset();
+    retrieveContext.mockReset();
+    buildRetrievalQuery.mockReset();
+    formatRetrievedContext.mockReset();
 
     getDb.mockReturnValue({});
     insertReviewRunning.mockResolvedValue("review-1");
@@ -84,6 +99,9 @@ describe("handleReviewJob", () => {
       GITHUB_PRIVATE_KEY: "k",
       AUTO_POST_ENABLED: false,
       HITL_CONFIDENCE_THRESHOLD: 0.75,
+      EMBEDDING_BASE_URL: "http://127.0.0.1:8000/v1",
+      EMBEDDING_API_KEY: "local",
+      EMBEDDING_MODEL: "Qwen/Qwen3-Embedding-0.6B",
     });
     createGithubApp.mockReturnValue({});
     getInstallationOctokit.mockResolvedValue({});
@@ -95,8 +113,12 @@ describe("handleReviewJob", () => {
       body: "",
       headSha: "h",
       baseSha: "b",
-      files: [],
+      files: [{ path: "a.ts", status: "modified", content: "x" }],
     });
+    indexChangedFiles.mockResolvedValue({ reembeddedFiles: 1, skippedUnchanged: 0 });
+    buildRetrievalQuery.mockReturnValue("query");
+    retrieveContext.mockResolvedValue([{ path: "a.ts", content: "x", score: 0.9 }]);
+    formatRetrievedContext.mockReturnValue("### a.ts\n```\nx\n```");
     runReviewGraph.mockResolvedValue({
       result: {
         reviewId: "review-1",
@@ -122,15 +144,21 @@ describe("handleReviewJob", () => {
     });
   });
 
-  it("runs the graph and persists findings", async () => {
+  it("indexes RAG context and passes repoContext into the graph", async () => {
     await handleReviewJob(job);
 
-    expect(runReviewGraph).toHaveBeenCalledTimes(1);
-    expect(insertFindings).toHaveBeenCalledWith(
-      {},
-      "review-1",
-      expect.arrayContaining([expect.objectContaining({ filePath: "a.ts" })]),
+    expect(indexChangedFiles).toHaveBeenCalledWith(
+      expect.objectContaining({
+        repoKey: "acme/api",
+      }),
     );
+    expect(retrieveContext).toHaveBeenCalled();
+    expect(runReviewGraph).toHaveBeenCalledWith(
+      expect.objectContaining({
+        repoContext: "### a.ts\n```\nx\n```",
+      }),
+    );
+    expect(insertFindings).toHaveBeenCalled();
     expect(finishReview).toHaveBeenCalledWith(
       {},
       "review-1",
@@ -139,5 +167,19 @@ describe("handleReviewJob", () => {
         outcome: "hitl_queue",
       }),
     );
+  });
+
+  it("soft-fails RAG and still completes a diff-only review", async () => {
+    indexChangedFiles.mockRejectedValue(new Error("embed server down"));
+
+    await handleReviewJob(job);
+
+    expect(runReviewGraph).toHaveBeenCalledWith(
+      expect.objectContaining({
+        repoContext: "",
+      }),
+    );
+    expect(insertFindings).toHaveBeenCalled();
+    expect(failReview).not.toHaveBeenCalled();
   });
 });

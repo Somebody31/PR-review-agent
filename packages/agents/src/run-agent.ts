@@ -22,17 +22,19 @@ export type SpecialistResult = {
 };
 
 /**
- * Run one specialist agent against PR context (diff-only in Phase 4; RAG later).
+ * Run one specialist against PR context and optional retrieved repo context (RAG).
  */
 export async function runSpecialistAgent(args: {
   agentType: AgentType;
   prContext: PrContext;
   llm: LlmConfig;
+  /** Retrieved repository context (RAG). Empty string skips the section. */
+  repoContext?: string;
   timeoutMs?: number;
   fetchImpl?: typeof fetch;
 }): Promise<SpecialistResult> {
   const system = getPrompt(args.agentType, "v1");
-  const user = buildUserMessage(args.prContext);
+  const user = buildUserMessage(args.prContext, args.repoContext);
   const timeoutMs = args.timeoutMs ?? AGENT_TIMEOUT_MS;
   const started = Date.now();
 
@@ -64,9 +66,9 @@ export async function runSpecialistAgent(args: {
 }
 
 /**
- * Build the user message with PR title/body and per-file patches.
+ * Build the user message with PR title/body, per-file patches, and optional RAG context.
  */
-export function buildUserMessage(prContext: PrContext): string {
+export function buildUserMessage(prContext: PrContext, repoContext?: string): string {
   const parts: string[] = [];
   parts.push(`# Pull request`);
   parts.push(`Title: ${prContext.title}`);
@@ -86,6 +88,12 @@ export function buildUserMessage(prContext: PrContext): string {
     } else {
       parts.push("(no patch available)");
     }
+    parts.push("");
+  }
+
+  if (repoContext && repoContext.trim().length > 0) {
+    parts.push(`# Repository context`);
+    parts.push(repoContext);
     parts.push("");
   }
 

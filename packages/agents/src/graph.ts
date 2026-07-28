@@ -16,6 +16,7 @@ const ReviewState = Annotation.Root({
   prNumber: Annotation<number>,
   prContext: Annotation<PrContext>,
   llm: Annotation<LlmConfig>,
+  repoContext: Annotation<string>,
   autoPostEnabled: Annotation<boolean>,
   hitlThreshold: Annotation<number>,
   findings: Annotation<Finding[]>({
@@ -81,6 +82,7 @@ async function specialistNode(
       agentType,
       prContext: state.prContext,
       llm: state.llm,
+      repoContext: state.repoContext,
     });
     return {
       findings: result.findings,
@@ -119,6 +121,7 @@ export async function runReviewGraph(input: {
   prNumber: number;
   prContext: PrContext;
   llm: LlmConfig;
+  repoContext?: string;
   autoPostEnabled: boolean;
   hitlThreshold: number;
 }): Promise<{ result: ReviewResult; agentTimings: string[] }> {
@@ -130,6 +133,7 @@ export async function runReviewGraph(input: {
     prNumber: input.prNumber,
     prContext: input.prContext,
     llm: input.llm,
+    repoContext: input.repoContext ?? "",
     autoPostEnabled: input.autoPostEnabled,
     hitlThreshold: input.hitlThreshold,
     findings: [],
