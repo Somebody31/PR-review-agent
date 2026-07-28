@@ -12,7 +12,8 @@
     "dev": "pnpm --parallel --filter @pr-review/api --filter @pr-review/worker run dev",
     "test": "pnpm -r run test",
     "lint": "pnpm -r run lint",
-    "typecheck": "pnpm --filter @pr-review/shared --filter @pr-review/core run build && pnpm -r run typecheck",
+    "typecheck": "pnpm --filter @pr-review/shared --filter @pr-review/core --filter @pr-review/db run build && pnpm -r run typecheck",
+    "db:migrate": "pnpm --filter @pr-review/db db:migrate",
     "format": "prettier --write ."
   },
   "devDependencies": {
