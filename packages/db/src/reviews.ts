@@ -1,6 +1,7 @@
 import { eq } from "drizzle-orm";
+import type { Finding, ReviewOutcome } from "@pr-review/shared";
 import type { Database } from "./client.js";
-import { prReviews } from "./schema.js";
+import { findings, prReviews } from "./schema.js";
 
 export type NewPrReviewInput = {
   owner: string;
@@ -9,6 +10,16 @@ export type NewPrReviewInput = {
   headSha: string;
   baseSha: string;
   installationId: number;
+};
+
+export type FinishReviewInput = {
+  status: string;
+  overallConfidence?: number;
+  outcome?: string;
+  summaryMarkdown?: string;
+  costUsd?: string;
+  errorMessage?: string;
+  githubReviewId?: string;
 };
 
 /**
@@ -39,18 +50,23 @@ export async function insertReviewRunning(
 }
 
 /**
- * Mark review terminal after context load (agents come in later phases).
+ * Mark review finished (completed / hitl_pending / failed) with optional result fields.
  */
-export async function completeContextShell(
+export async function finishReview(
   db: Database,
   reviewId: string,
-  fileCount: number,
+  input: FinishReviewInput,
 ): Promise<void> {
   await db
     .update(prReviews)
     .set({
-      status: "completed",
-      summaryMarkdown: `Context loaded (${fileCount} files). Agents not run yet.`,
+      status: input.status,
+      overallConfidence: input.overallConfidence,
+      outcome: input.outcome,
+      summaryMarkdown: input.summaryMarkdown,
+      costUsd: input.costUsd,
+      errorMessage: input.errorMessage,
+      githubReviewId: input.githubReviewId,
       updatedAt: new Date(),
     })
     .where(eq(prReviews.id, reviewId));
@@ -64,12 +80,47 @@ export async function failReview(
   reviewId: string,
   errorMessage: string,
 ): Promise<void> {
-  await db
-    .update(prReviews)
-    .set({
-      status: "failed",
-      errorMessage: errorMessage.slice(0, 2000),
-      updatedAt: new Date(),
-    })
-    .where(eq(prReviews.id, reviewId));
+  await finishReview(db, reviewId, {
+    status: "failed",
+    errorMessage: errorMessage.slice(0, 2000),
+  });
+}
+
+/**
+ * Persist structured findings for a review.
+ */
+export async function insertFindings(
+  db: Database,
+  reviewId: string,
+  items: Finding[],
+): Promise<void> {
+  if (items.length === 0) {
+    return;
+  }
+
+  const rows = items.map((item) => ({
+    reviewId,
+    agentType: item.agentType,
+    severity: item.severity,
+    category: item.category,
+    summary: item.summary,
+    filePath: item.filePath,
+    lineStart: item.lineStart,
+    lineEnd: item.lineEnd,
+    suggestion: item.suggestion,
+    confidence: item.confidence,
+    rationale: item.rationale,
+  }));
+
+  await db.insert(findings).values(rows);
+}
+
+/**
+ * Map review outcome to DB status.
+ */
+export function statusForOutcome(outcome: ReviewOutcome): "completed" | "hitl_pending" {
+  if (outcome === "hitl_queue" || outcome === "critical_escalate") {
+    return "hitl_pending";
+  }
+  return "completed";
 }

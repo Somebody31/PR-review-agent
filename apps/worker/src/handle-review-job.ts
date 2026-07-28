@@ -1,9 +1,12 @@
+import { runReviewGraph } from "@pr-review/agents";
 import { createLogger, loadConfig } from "@pr-review/core";
 import {
-  completeContextShell,
   failReview,
+  finishReview,
   getDb,
+  insertFindings,
   insertReviewRunning,
+  statusForOutcome,
 } from "@pr-review/db";
 import {
   createGithubApp,
@@ -15,8 +18,7 @@ import type { ReviewJob } from "@pr-review/shared";
 const logger = createLogger({ name: "worker" });
 
 /**
- * Phase 3: create review shell, fetch PR context from GitHub, mark terminal.
- * Later phases run LangGraph agents on the same path.
+ * Load PR context, run LangGraph specialists + aggregate, persist findings.
  */
 export async function handleReviewJob(job: ReviewJob): Promise<void> {
   const config = loadConfig();
@@ -43,6 +45,10 @@ export async function handleReviewJob(job: ReviewJob): Promise<void> {
   );
 
   try {
+    if (!config.DEEPSEEK_API_KEY) {
+      throw new Error("DEEPSEEK_API_KEY is required to run review agents");
+    }
+
     const app = createGithubApp(config.GITHUB_APP_ID, config.GITHUB_PRIVATE_KEY);
     const octokit = await getInstallationOctokit(app, job.installationId);
     const context = await fetchPrContext(octokit, {
@@ -51,21 +57,54 @@ export async function handleReviewJob(job: ReviewJob): Promise<void> {
       prNumber: job.prNumber,
     });
 
-    await completeContextShell(db, reviewId, context.files.length);
-
     logger.info(
       {
         reviewId,
         title: context.title,
         fileCount: context.files.length,
-        headSha: context.headSha,
       },
       "PR context loaded",
+    );
+
+    const graphOutput = await runReviewGraph({
+      reviewId,
+      owner: job.owner,
+      repo: job.repo,
+      prNumber: job.prNumber,
+      prContext: context,
+      llm: {
+        apiKey: config.DEEPSEEK_API_KEY,
+        baseUrl: config.DEEPSEEK_BASE_URL,
+        model: config.LLM_MODEL,
+      },
+      autoPostEnabled: config.AUTO_POST_ENABLED,
+      hitlThreshold: config.HITL_CONFIDENCE_THRESHOLD,
+    });
+
+    const result = graphOutput.result;
+    logger.info({ reviewId, agentTimings: graphOutput.agentTimings }, "agent timings");
+
+    await insertFindings(db, reviewId, result.findings);
+    await finishReview(db, reviewId, {
+      status: statusForOutcome(result.outcome),
+      overallConfidence: result.overallConfidence,
+      outcome: result.outcome,
+      summaryMarkdown: result.summaryMarkdown,
+    });
+
+    logger.info(
+      {
+        reviewId,
+        findingCount: result.findings.length,
+        outcome: result.outcome,
+        overallConfidence: result.overallConfidence,
+      },
+      "review completed",
     );
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : String(error);
     await failReview(db, reviewId, message);
-    logger.error({ reviewId, err: message }, "review failed while loading context");
+    logger.error({ reviewId, err: message }, "review failed");
     throw error;
   }
 }

@@ -12,6 +12,7 @@
     "lint": "echo \"no lint config yet\""
   },
   "dependencies": {
+    "@pr-review/agents": "workspace:^",
     "@pr-review/core": "workspace:*",
     "@pr-review/db": "workspace:^",
     "@pr-review/github": "workspace:^",

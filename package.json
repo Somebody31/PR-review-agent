@@ -12,7 +12,7 @@
     "dev": "pnpm --parallel --filter @pr-review/api --filter @pr-review/worker run dev",
     "test": "pnpm -r run test",
     "lint": "pnpm -r run lint",
-    "typecheck": "pnpm --filter @pr-review/shared --filter @pr-review/core --filter @pr-review/db --filter @pr-review/github run build && pnpm -r run typecheck",
+    "typecheck": "pnpm --filter @pr-review/shared --filter @pr-review/core --filter @pr-review/db --filter @pr-review/github --filter @pr-review/agents run build && pnpm -r run typecheck",
     "db:migrate": "pnpm --filter @pr-review/db db:migrate",
     "format": "prettier --write ."
   },

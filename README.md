@@ -17,7 +17,8 @@ apps/worker       BullMQ + LangGraph review
 packages/shared   Zod contracts
 packages/core     config + logger + queue helpers
 packages/db       Drizzle + pgvector schema
-packages/github   Webhook HMAC + PR event parse (+ more as phases land)
+packages/github   Webhook HMAC, App auth, PR context
+packages/agents   DeepSeek LLM, prompts, LangGraph graph
 ```
 
 ## Quick start
@@ -32,11 +33,12 @@ pnpm test
 
 # Infra (requires Docker)
 docker compose up -d
+pnpm db:migrate
 
 # Optional: copy env
 cp .env.example .env
 
-# API + worker (needs DATABASE_URL + REDIS_URL)
+# API + worker (needs DATABASE_URL + REDIS_URL + secrets)
 pnpm --filter @pr-review/api dev
 pnpm --filter @pr-review/worker dev
 ```
@@ -49,14 +51,13 @@ Local Qwen embed server is **not** in docker-compose — start it separately bef
 |-------|------|--------|
 | **0** | Foundations | **Done** |
 | **1** | Data spine | **Done** |
-| **2** | Ingress & queue | **Done** (HMAC webhook, delivery idempotency, BullMQ, worker skeleton) |
-| **3** | Context pipeline | **Done** (GitHub App auth, PR context fetch, review shell) |
-| 4 | Agents & LangGraph | Not started |
-| 5+ | RAG → … | Not started |
+| **2** | Ingress & queue | **Done** |
+| **3** | Context pipeline | **Done** |
+| **4** | Agents & LangGraph | **Done** (DeepSeek structured LLM, 4 specialists, aggregate, findings in DB) |
+| 5 | Memory & RAG | Not started |
+| 6+ | Post → HITL → CI | Not started |
 
-**Next:** Phase **4** — DeepSeek structured LLM, four specialists, LangGraph aggregate, persist findings.
-
-Docker Compose green gate: run `docker compose up -d` where Docker is available (not verified on all machines).
+**Next:** Phase **5** — chunk + local Qwen embed, hybrid retrieve, inject into agents.
 
 ## License
 

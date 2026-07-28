@@ -1,5 +1,5 @@
 {
-  "name": "@pr-review/db",
+  "name": "@pr-review/agents",
   "version": "0.0.1",
   "private": true,
   "type": "module",
@@ -15,18 +15,16 @@
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run",
-    "lint": "echo \"no lint config yet\"",
-    "db:generate": "drizzle-kit generate",
-    "db:migrate": "tsx src/migrate.ts"
+    "lint": "echo \"no lint config yet\""
   },
   "dependencies": {
-    "@pr-review/shared": "workspace:^",
-    "drizzle-orm": "^0.40.0",
-    "postgres": "^3.4.5"
+    "@langchain/core": "^0.3.42",
+    "@langchain/langgraph": "^0.2.54",
+    "@pr-review/github": "workspace:*",
+    "@pr-review/shared": "workspace:*",
+    "zod": "^3.24.2"
   },
   "devDependencies": {
-    "drizzle-kit": "^0.30.5",
-    "tsx": "^4.19.3",
     "typescript": "^5.8.2",
     "vitest": "^3.0.9"
   }
