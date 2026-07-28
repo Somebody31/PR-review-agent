@@ -1,23 +1,26 @@
 {
-  "name": "@pr-review/worker",
+  "name": "@pr-review/github",
   "version": "0.0.1",
   "private": true,
   "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
   "scripts": {
-    "dev": "tsx watch src/index.ts",
     "build": "tsc -p tsconfig.json",
-    "start": "node dist/index.js",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run",
     "lint": "echo \"no lint config yet\""
   },
   "dependencies": {
-    "@pr-review/core": "workspace:*",
-    "@pr-review/shared": "workspace:*",
-    "bullmq": "^5.41.0"
+    "@pr-review/shared": "workspace:*"
   },
   "devDependencies": {
-    "tsx": "^4.19.3",
     "typescript": "^5.8.2",
     "vitest": "^3.0.9"
   }

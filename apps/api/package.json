@@ -8,13 +8,16 @@
     "build": "tsc -p tsconfig.json",
     "start": "node dist/index.js",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "vitest run --passWithNoTests",
+    "test": "vitest run",
     "lint": "echo \"no lint config yet\""
   },
   "dependencies": {
     "@hono/node-server": "^1.14.1",
     "@pr-review/core": "workspace:*",
-    "@pr-review/shared": "workspace:*",
+    "@pr-review/db": "workspace:*",
+    "@pr-review/github": "workspace:*",
+    "@pr-review/shared": "workspace:^",
+    "drizzle-orm": "^0.40.0",
     "hono": "^4.7.4"
   },
   "devDependencies": {

@@ -18,6 +18,8 @@
     "lint": "echo \"no lint config yet\""
   },
   "dependencies": {
+    "@pr-review/shared": "workspace:*",
+    "bullmq": "^5.41.0",
     "pino": "^9.6.0",
     "pino-pretty": "^13.0.0",
     "zod": "^3.24.2"

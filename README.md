@@ -15,11 +15,12 @@ GitHub PR → verify webhook → queue → LangGraph (four specialists: security
 apps/api          Hono — webhooks + REST
 apps/worker       BullMQ + LangGraph review
 packages/shared   Zod contracts
-packages/core     config + logger
-packages/*        (more as phases land)
+packages/core     config + logger + queue helpers
+packages/db       Drizzle + pgvector schema
+packages/github   Webhook HMAC + PR event parse (+ more as phases land)
 ```
 
-## Quick start (Phase 0)
+## Quick start
 
 ```bash
 # Install
@@ -34,6 +35,10 @@ docker compose up -d
 
 # Optional: copy env
 cp .env.example .env
+
+# API + worker (needs DATABASE_URL + REDIS_URL)
+pnpm --filter @pr-review/api dev
+pnpm --filter @pr-review/worker dev
 ```
 
 Local Qwen embed server is **not** in docker-compose — start it separately before RAG (Phase 5).
@@ -42,12 +47,13 @@ Local Qwen embed server is **not** in docker-compose — start it separately bef
 
 | Phase | Name | Status |
 |-------|------|--------|
-| **0** | Foundations | **Done** (code gates: install / typecheck / tests) |
-| 1 | Data spine | Not started |
-| 2 | Ingress & queue | Not started |
-| 3+ | Context → agents → … | Not started |
+| **0** | Foundations | **Done** |
+| **1** | Data spine | **Done** |
+| **2** | Ingress & queue | **Done** (HMAC webhook, delivery idempotency, BullMQ, worker skeleton) |
+| 3 | Context pipeline | Not started |
+| 4+ | Agents → … | Not started |
 
-**Next:** Step **1.1** — `packages/db` Drizzle connect + migrate + `SELECT 1` (only that; no overbuild).
+**Next:** Phase **3** — GitHub App auth, fetch PR context, persist `pr_reviews` shell.
 
 Docker Compose green gate: run `docker compose up -d` where Docker is available (not verified on all machines).
 
