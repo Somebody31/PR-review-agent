@@ -1,7 +1,10 @@
+import { randomUUID } from "node:crypto";
 import { z } from "zod";
 import type { PrContext } from "@pr-review/github";
 import { findingSchema, type AgentType, type Finding } from "@pr-review/shared";
-import { completeStructured } from "./llm.js";
+import { DEFAULT_LLM_ESTIMATE_USD } from "./budget.js";
+import { emitHookEvent, type ReviewHooks } from "./hooks.js";
+import { completeStructured, estimateCostUsd } from "./llm.js";
 import { getPrompt } from "./prompts.js";
 import { withTimeout } from "./timeout.js";
 
@@ -19,10 +22,12 @@ export type LlmConfig = {
 export type SpecialistResult = {
   findings: Finding[];
   latencyMs: number;
+  costUsd: number;
 };
 
 /**
  * Run one specialist against PR context and optional retrieved repo context (RAG).
+ * Emits agent_start / llm_call / agent_end events when hooks are provided.
  */
 export async function runSpecialistAgent(args: {
   agentType: AgentType;
@@ -32,37 +37,91 @@ export async function runSpecialistAgent(args: {
   repoContext?: string;
   timeoutMs?: number;
   fetchImpl?: typeof fetch;
+  hooks?: ReviewHooks;
 }): Promise<SpecialistResult> {
   const system = getPrompt(args.agentType, "v1");
   const user = buildUserMessage(args.prContext, args.repoContext);
   const timeoutMs = args.timeoutMs ?? AGENT_TIMEOUT_MS;
+  const spanId = randomUUID().slice(0, 16);
   const started = Date.now();
 
-  const work = completeStructured({
-    apiKey: args.llm.apiKey,
-    baseUrl: args.llm.baseUrl,
-    model: args.llm.model,
-    system,
-    user,
-    schema: findingsArraySchema,
-    fetchImpl: args.fetchImpl,
+  await emitHookEvent(args.hooks, {
+    eventType: "agent_start",
+    agent: args.agentType,
+    spanId,
   });
 
-  const result = await withTimeout(work, timeoutMs, `${args.agentType} agent`);
-
-  const normalized: Finding[] = [];
-  for (const finding of result.data) {
-    // Force the agent type so a confused model cannot spoof another specialist
-    normalized.push({
-      ...finding,
-      agentType: args.agentType,
+  try {
+    const work = completeStructured({
+      apiKey: args.llm.apiKey,
+      baseUrl: args.llm.baseUrl,
+      model: args.llm.model,
+      system,
+      user,
+      schema: findingsArraySchema,
+      fetchImpl: args.fetchImpl,
+      checkBudget: args.hooks?.checkBudget,
+      budgetEstimateUsd: DEFAULT_LLM_ESTIMATE_USD,
     });
-  }
 
-  return {
-    findings: normalized,
-    latencyMs: Date.now() - started,
-  };
+    const result = await withTimeout(work, timeoutMs, `${args.agentType} agent`);
+    const costUsd = estimateCostUsd(result.model, result.usage);
+    const latencyMs = Date.now() - started;
+
+    // Billable cost lives only on llm_call (agent_end is timing/outcome only)
+    await emitHookEvent(args.hooks, {
+      eventType: "llm_call",
+      agent: args.agentType,
+      spanId,
+      model: result.model,
+      tokensIn: result.usage.tokensIn,
+      tokensOut: result.usage.tokensOut,
+      costUsd,
+      latencyMs: result.latencyMs,
+    });
+
+    const normalized: Finding[] = [];
+    for (const finding of result.data) {
+      // Force the agent type so a confused model cannot spoof another specialist
+      normalized.push({
+        ...finding,
+        agentType: args.agentType,
+      });
+    }
+
+    await emitHookEvent(args.hooks, {
+      eventType: "agent_end",
+      agent: args.agentType,
+      spanId,
+      model: result.model,
+      tokensIn: result.usage.tokensIn,
+      tokensOut: result.usage.tokensOut,
+      latencyMs,
+      outcome: "ok",
+      payload: { findingCount: normalized.length },
+    });
+
+    // tokens/model already on llm_call / agent_end hooks; graph only needs findings/latency/cost
+    return {
+      findings: normalized,
+      latencyMs,
+      costUsd,
+    };
+  } catch (error: unknown) {
+    const latencyMs = Date.now() - started;
+    const message = error instanceof Error ? error.message : String(error);
+
+    await emitHookEvent(args.hooks, {
+      eventType: "agent_end",
+      agent: args.agentType,
+      spanId,
+      latencyMs,
+      outcome: "error",
+      payload: { error: message.slice(0, 500) },
+    });
+
+    throw error;
+  }
 }
 
 /**

@@ -26,3 +26,16 @@ export {
   type CompiledReviewGraph,
 } from "./graph.js";
 export { withTimeout } from "./timeout.js";
+export {
+  isOverBudget,
+  createBudgetExceededError,
+  isBudgetExceededError,
+  DEFAULT_LLM_ESTIMATE_USD,
+  type BudgetExceededError,
+} from "./budget.js";
+export type {
+  AgentHookEvent,
+  OnAgentEvent,
+  CheckBudget,
+  ReviewHooks,
+} from "./hooks.js";

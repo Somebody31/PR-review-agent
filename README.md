@@ -57,9 +57,18 @@ Local Qwen embed server is **not** in docker-compose — start it separately bef
 | **4** | Agents & LangGraph | **Done** |
 | **5** | Memory & RAG | **Done** (chunk/hash, local Qwen embed, incremental index, vector retrieve → `repoContext`) |
 | **6** | Posting & reliability | **Done** (`withRetry`, GitHub PR review post, idempotent by head SHA) |
-| 7+ | Events, budget, HITL, CI | Not started |
+| **7** | Events, budget, REST | **Done** (`agent_events`, BudgetGuard UTC day, REST read API; no Next.js) |
+| 8+ | HITL write, security, evals, CI | Not started |
 
-**Next:** Phase **7** — agent events, BudgetGuard, REST read API (HITL still later).
+**Next:** Phase **8** — HITL approve/reject writes (no Phase 7 dashboard shell).
+
+### Phase 7 notes
+
+- `emitAgentEvent` + helpers in `@pr-review/db`; timeline queryable by `review_id`.
+- Worker emits `review_start` / `review_end` / `review_failed` / `github_post`; agents emit `agent_start` / `llm_call` / `agent_end` / `aggregate`.
+- **BudgetGuard:** sums billable `cost_usd` on **`llm_call` only** for the **UTC calendar day** (not `agent_end` / `review_end`); before each LLM call if `spent + estimate > DAILY_BUDGET_USD` → budget error, review `failed`, `budget_block` event.
+- REST (Bearer `API_AUTH_TOKEN`): `GET /api/reviews`, `/api/reviews/:id`, `/api/reviews/:id/events`, `/api/economics/summary`, `/api/hitl` (list only).
+- No Next.js dashboard (ADR-009 / user lock). HITL approve/reject writes deferred to Phase 8.
 
 ### Phase 6 notes
 

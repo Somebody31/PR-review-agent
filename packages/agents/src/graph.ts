@@ -2,6 +2,8 @@ import { Annotation, END, START, StateGraph } from "@langchain/langgraph";
 import type { PrContext } from "@pr-review/github";
 import type { AgentType, Finding, ReviewResult } from "@pr-review/shared";
 import { aggregateFindings } from "./aggregate.js";
+import { isBudgetExceededError } from "./budget.js";
+import { emitHookEvent, type ReviewHooks } from "./hooks.js";
 import type { LlmConfig } from "./run-agent.js";
 import { runSpecialistAgent } from "./run-agent.js";
 
@@ -19,6 +21,7 @@ const ReviewState = Annotation.Root({
   repoContext: Annotation<string>,
   autoPostEnabled: Annotation<boolean>,
   hitlThreshold: Annotation<number>,
+  hooks: Annotation<ReviewHooks | undefined>,
   findings: Annotation<Finding[]>({
     reducer: (left: Finding[], right: Finding[]) => left.concat(right),
     default: () => [],
@@ -29,6 +32,10 @@ const ReviewState = Annotation.Root({
   }),
   agentTimings: Annotation<string[]>({
     reducer: (left: string[], right: string[]) => left.concat(right),
+    default: () => [],
+  }),
+  totalCostUsd: Annotation<number[]>({
+    reducer: (left: number[], right: number[]) => left.concat(right),
     default: () => [],
   }),
   result: Annotation<ReviewResult | null>({
@@ -83,12 +90,18 @@ async function specialistNode(
       prContext: state.prContext,
       llm: state.llm,
       repoContext: state.repoContext,
+      hooks: state.hooks,
     });
     return {
       findings: result.findings,
       agentTimings: [`${agentType}:${result.latencyMs}ms`],
+      totalCostUsd: [result.costUsd],
     };
   } catch (error: unknown) {
+    // Budget hard-stop must fail the whole review, not become a soft agent error
+    if (isBudgetExceededError(error)) {
+      throw error;
+    }
     const message = error instanceof Error ? error.message : String(error);
     return {
       agentErrors: [`${agentType}: ${message}`],
@@ -97,7 +110,7 @@ async function specialistNode(
   }
 }
 
-function aggregateNode(state: ReviewGraphState): Partial<ReviewGraphState> {
+async function aggregateNode(state: ReviewGraphState): Promise<Partial<ReviewGraphState>> {
   const result = aggregateFindings({
     reviewId: state.reviewId,
     owner: state.owner,
@@ -108,6 +121,18 @@ function aggregateNode(state: ReviewGraphState): Partial<ReviewGraphState> {
     autoPostEnabled: state.autoPostEnabled,
     hitlThreshold: state.hitlThreshold,
   });
+
+  await emitHookEvent(state.hooks, {
+    eventType: "aggregate",
+    agent: "aggregate",
+    outcome: result.outcome,
+    confidence: result.overallConfidence,
+    payload: {
+      findingCount: result.findings.length,
+      agentErrors: state.agentErrors,
+    },
+  });
+
   return { result };
 }
 
@@ -124,7 +149,8 @@ export async function runReviewGraph(input: {
   repoContext?: string;
   autoPostEnabled: boolean;
   hitlThreshold: number;
-}): Promise<{ result: ReviewResult; agentTimings: string[] }> {
+  hooks?: ReviewHooks;
+}): Promise<{ result: ReviewResult; agentTimings: string[]; totalCostUsd: number }> {
   const graph = buildReviewGraph();
   const finalState = await graph.invoke({
     reviewId: input.reviewId,
@@ -136,17 +162,26 @@ export async function runReviewGraph(input: {
     repoContext: input.repoContext ?? "",
     autoPostEnabled: input.autoPostEnabled,
     hitlThreshold: input.hitlThreshold,
+    hooks: input.hooks,
     findings: [],
     agentErrors: [],
     agentTimings: [],
+    totalCostUsd: [],
     result: null,
   });
 
   if (!finalState.result) {
     throw new Error("review graph finished without a result");
   }
+
+  let totalCostUsd = 0;
+  for (const part of finalState.totalCostUsd) {
+    totalCostUsd += part;
+  }
+
   return {
     result: finalState.result,
     agentTimings: finalState.agentTimings,
+    totalCostUsd,
   };
 }

@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { PrContext } from "@pr-review/github";
 import type { Finding } from "@pr-review/shared";
+import { createBudgetExceededError, isBudgetExceededError } from "./budget.js";
 import { runReviewGraph } from "./graph.js";
 import { runSpecialistAgent } from "./run-agent.js";
 
@@ -51,6 +52,7 @@ describe("runReviewGraph", () => {
       return {
         findings: [makeFinding(args.agentType)],
         latencyMs: 12,
+        costUsd: 0.001,
       };
     });
 
@@ -72,6 +74,7 @@ describe("runReviewGraph", () => {
     expect(output.agentTimings.join(" ")).toMatch(/tests:/);
     expect(output.agentTimings.join(" ")).toMatch(/docs:/);
     expect(output.result.outcome).toBe("hitl_queue");
+    expect(output.totalCostUsd).toBeCloseTo(0.004);
   });
 
   it("continues when one specialist fails", async () => {
@@ -82,6 +85,7 @@ describe("runReviewGraph", () => {
       return {
         findings: [makeFinding(args.agentType)],
         latencyMs: 5,
+        costUsd: 0.001,
       };
     });
 
@@ -99,5 +103,34 @@ describe("runReviewGraph", () => {
     expect(output.result.findings.length).toBe(3);
     expect(output.agentTimings.some((t) => t.includes("docs:error"))).toBe(true);
     expect(output.result.summaryMarkdown).toMatch(/docs boom|Agent errors/i);
+  });
+
+  it("rethrows BudgetExceededError instead of soft-failing the specialist", async () => {
+    mockedRunSpecialist.mockImplementation(async (args) => {
+      if (args.agentType === "security") {
+        throw createBudgetExceededError(20, 0.01, 20);
+      }
+      return {
+        findings: [makeFinding(args.agentType)],
+        latencyMs: 5,
+        costUsd: 0.001,
+      };
+    });
+
+    try {
+      await runReviewGraph({
+        reviewId: "r1",
+        owner: "acme",
+        repo: "api",
+        prNumber: 1,
+        prContext: emptyContext,
+        llm: { apiKey: "k", baseUrl: "https://x", model: "m" },
+        autoPostEnabled: false,
+        hitlThreshold: 0.75,
+      });
+      expect.fail("expected BudgetExceededError");
+    } catch (error: unknown) {
+      expect(isBudgetExceededError(error)).toBe(true);
+    }
   });
 });

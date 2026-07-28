@@ -1,6 +1,14 @@
-import { runReviewGraph } from "@pr-review/agents";
+import {
+  createBudgetExceededError,
+  isBudgetExceededError,
+  isOverBudget,
+  runReviewGraph,
+  type AgentHookEvent,
+  type ReviewHooks,
+} from "@pr-review/agents";
 import { createLogger, loadConfig, withRetry } from "@pr-review/core";
 import {
+  emitAgentEvent,
   failReview,
   findPostedReviewByHead,
   finishReview,
@@ -9,6 +17,7 @@ import {
   insertReviewRunning,
   setGithubReviewId,
   statusForOutcome,
+  sumCostUsdUtcDay,
   type Database,
 } from "@pr-review/db";
 import {
@@ -33,6 +42,7 @@ const logger = createLogger({ name: "worker" });
 /**
  * Load PR context, index/retrieve RAG context, run LangGraph, persist findings.
  * Posts to GitHub only when outcome is auto_post (idempotent per head SHA).
+ * Emits agent_events for timeline / cost / BudgetGuard.
  */
 export async function handleReviewJob(job: ReviewJob): Promise<void> {
   const config = loadConfig();
@@ -44,6 +54,19 @@ export async function handleReviewJob(job: ReviewJob): Promise<void> {
     headSha: job.headSha,
     baseSha: job.baseSha,
     installationId: job.installationId,
+  });
+
+  await emitAgentEvent(db, {
+    reviewId,
+    eventType: "review_start",
+    agent: "worker",
+    payload: {
+      owner: job.owner,
+      repo: job.repo,
+      prNumber: job.prNumber,
+      headSha: job.headSha,
+      deliveryId: job.deliveryId,
+    },
   });
 
   logger.info(
@@ -96,6 +119,8 @@ export async function handleReviewJob(job: ReviewJob): Promise<void> {
       reviewId,
     });
 
+    const hooks = buildReviewHooks(db, reviewId, config.DAILY_BUDGET_USD);
+
     const graphOutput = await runReviewGraph({
       reviewId,
       owner: job.owner,
@@ -110,6 +135,7 @@ export async function handleReviewJob(job: ReviewJob): Promise<void> {
       repoContext,
       autoPostEnabled: config.AUTO_POST_ENABLED,
       hitlThreshold: config.HITL_CONFIDENCE_THRESHOLD,
+      hooks,
     });
 
     const result = graphOutput.result;
@@ -127,12 +153,30 @@ export async function handleReviewJob(job: ReviewJob): Promise<void> {
       files: context.files,
     });
 
+    const costUsd =
+      graphOutput.totalCostUsd > 0 ? String(graphOutput.totalCostUsd) : undefined;
+
     await finishReview(db, reviewId, {
       status: statusForOutcome(result.outcome),
       overallConfidence: result.overallConfidence,
       outcome: result.outcome,
       summaryMarkdown: result.summaryMarkdown,
       githubReviewId,
+      costUsd,
+    });
+
+    // review_end must not set costUsd — billable spend is only on llm_call rows
+    await emitAgentEvent(db, {
+      reviewId,
+      eventType: "review_end",
+      agent: "worker",
+      outcome: result.outcome,
+      confidence: result.overallConfidence,
+      payload: {
+        findingCount: result.findings.length,
+        githubReviewId: githubReviewId ?? null,
+        totalCostUsd: graphOutput.totalCostUsd,
+      },
     });
 
     logger.info(
@@ -142,15 +186,83 @@ export async function handleReviewJob(job: ReviewJob): Promise<void> {
         outcome: result.outcome,
         overallConfidence: result.overallConfidence,
         githubReviewId,
+        totalCostUsd: graphOutput.totalCostUsd,
       },
       "review completed",
     );
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : String(error);
+    const isBudget = isBudgetExceededError(error);
+
     await failReview(db, reviewId, message);
-    logger.error({ reviewId, err: message }, "review failed");
+
+    // budget_block is already emitted by checkBudget; always close the timeline with review_failed
+    await emitAgentEvent(db, {
+      reviewId,
+      eventType: "review_failed",
+      agent: "worker",
+      outcome: "failed",
+      payload: {
+        error: message.slice(0, 500),
+        budgetExceeded: isBudget,
+        ...(isBudget
+          ? {
+              spentUsd: error.spentUsd,
+              estimateUsd: error.estimateUsd,
+              dailyBudgetUsd: error.dailyBudgetUsd,
+            }
+          : {}),
+      },
+    });
+
+    logger.error({ reviewId, err: message, budget: isBudget }, "review failed");
     throw error;
   }
+}
+
+/**
+ * Wire agent hooks to DB: emit events + BudgetGuard daily spend check (UTC day).
+ */
+function buildReviewHooks(
+  db: Database,
+  reviewId: string,
+  dailyBudgetUsd: number,
+): ReviewHooks {
+  return {
+    onEvent: async (event: AgentHookEvent): Promise<void> => {
+      await emitAgentEvent(db, {
+        reviewId,
+        eventType: event.eventType,
+        agent: event.agent,
+        spanId: event.spanId,
+        parentSpan: event.parentSpan,
+        model: event.model,
+        tokensIn: event.tokensIn,
+        tokensOut: event.tokensOut,
+        costUsd: event.costUsd,
+        latencyMs: event.latencyMs,
+        outcome: event.outcome,
+        confidence: event.confidence,
+        payload: event.payload,
+      });
+    },
+    checkBudget: async (estimateUsd: number): Promise<void> => {
+      const spentUsd = await sumCostUsdUtcDay(db);
+      if (isOverBudget(spentUsd, estimateUsd, dailyBudgetUsd)) {
+        await emitAgentEvent(db, {
+          reviewId,
+          eventType: "budget_block",
+          agent: "budget",
+          payload: {
+            spentUsd,
+            estimateUsd,
+            dailyBudgetUsd,
+          },
+        });
+        throw createBudgetExceededError(spentUsd, estimateUsd, dailyBudgetUsd);
+      }
+    },
+  };
 }
 
 /**
@@ -185,6 +297,13 @@ async function maybePostGithubReview(args: {
       },
       "skipping GitHub post; already posted for this head",
     );
+    await emitAgentEvent(args.db, {
+      reviewId: args.reviewId,
+      eventType: "github_post",
+      agent: "worker",
+      outcome: "skipped_duplicate",
+      payload: { githubReviewId: existing.githubReviewId },
+    });
     return existing.githubReviewId;
   }
 
@@ -208,6 +327,14 @@ async function maybePostGithubReview(args: {
 
   // Persist id before finishReview so a crash still blocks duplicate posts
   await setGithubReviewId(args.db, args.reviewId, posted.githubReviewId);
+
+  await emitAgentEvent(args.db, {
+    reviewId: args.reviewId,
+    eventType: "github_post",
+    agent: "worker",
+    outcome: "posted",
+    payload: { githubReviewId: posted.githubReviewId },
+  });
 
   logger.info(
     { reviewId: args.reviewId, githubReviewId: posted.githubReviewId },

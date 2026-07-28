@@ -81,4 +81,50 @@ describe("runSpecialistAgent", () => {
     expect(result.findings[0]?.agentType).toBe("security");
     expect(result.latencyMs).toBeGreaterThanOrEqual(0);
   });
+
+  it("puts billable costUsd only on llm_call, not agent_end", async () => {
+    const findingJson = [
+      {
+        agentType: "quality",
+        severity: "LOW",
+        category: "style",
+        summary: "note",
+        filePath: "src/users.ts",
+        lineStart: 1,
+        confidence: 0.7,
+        rationale: "r",
+      },
+    ];
+    const fetchImpl = vi.fn(async () => {
+      return new Response(
+        JSON.stringify({
+          choices: [{ message: { content: JSON.stringify(findingJson) } }],
+          usage: { prompt_tokens: 1000, completion_tokens: 500 },
+        }),
+        { status: 200 },
+      );
+    });
+    const events: Array<{ eventType: string; costUsd?: number }> = [];
+
+    await runSpecialistAgent({
+      agentType: "quality",
+      prContext: sqlFixtureContext,
+      llm: {
+        apiKey: "test",
+        baseUrl: "https://example.test/v1",
+        model: "deepseek-v4-flash",
+      },
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+      hooks: {
+        onEvent: async (event) => {
+          events.push({ eventType: event.eventType, costUsd: event.costUsd });
+        },
+      },
+    });
+
+    const llmCall = events.find((e) => e.eventType === "llm_call");
+    const agentEnd = events.find((e) => e.eventType === "agent_end");
+    expect(llmCall?.costUsd).toBeGreaterThan(0);
+    expect(agentEnd?.costUsd).toBeUndefined();
+  });
 });

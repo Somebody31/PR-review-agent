@@ -12,3 +12,24 @@ export {
   type FinishReviewInput,
   type PostedReviewByHead,
 } from "./reviews.js";
+export {
+  emitAgentEvent,
+  listEventsForReview,
+  eventsSummaryForReview,
+  sumCostUsdUtcDay,
+  utcDayBounds,
+  economicsSummary,
+  BILLABLE_EVENT_TYPE,
+  type AgentEventInput,
+  type AgentEventRow,
+} from "./events.js";
+export {
+  listReviews,
+  getReviewById,
+  reviewExists,
+  listHitlItems,
+  type ReviewListItem,
+  type FindingListItem,
+  type ReviewDetail,
+  type HitlListItem,
+} from "./queries.js";

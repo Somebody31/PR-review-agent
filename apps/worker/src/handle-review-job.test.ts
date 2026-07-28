@@ -9,6 +9,8 @@ const failReview = vi.fn();
 const findPostedReviewByHead = vi.fn();
 const setGithubReviewId = vi.fn();
 const getDb = vi.fn();
+const emitAgentEvent = vi.fn();
+const sumCostUsdUtcDay = vi.fn();
 const runReviewGraph = vi.fn();
 const createGithubApp = vi.fn();
 const getInstallationOctokit = vi.fn();
@@ -27,6 +29,8 @@ vi.mock("@pr-review/db", () => ({
   failReview: (...args: unknown[]) => failReview(...args),
   findPostedReviewByHead: (...args: unknown[]) => findPostedReviewByHead(...args),
   setGithubReviewId: (...args: unknown[]) => setGithubReviewId(...args),
+  emitAgentEvent: (...args: unknown[]) => emitAgentEvent(...args),
+  sumCostUsdUtcDay: (...args: unknown[]) => sumCostUsdUtcDay(...args),
   getDb: (...args: unknown[]) => getDb(...args),
   statusForOutcome: (outcome: string) =>
     outcome === "hitl_queue" || outcome === "critical_escalate"
@@ -36,6 +40,26 @@ vi.mock("@pr-review/db", () => ({
 
 vi.mock("@pr-review/agents", () => ({
   runReviewGraph: (...args: unknown[]) => runReviewGraph(...args),
+  isOverBudget: (spentUsd: number, estimateUsd: number, dailyBudgetUsd: number) =>
+    spentUsd + estimateUsd > dailyBudgetUsd,
+  createBudgetExceededError: (
+    spentUsd: number,
+    estimateUsd: number,
+    dailyBudgetUsd: number,
+  ) => {
+    const error = new Error("budget") as Error & {
+      spentUsd: number;
+      estimateUsd: number;
+      dailyBudgetUsd: number;
+    };
+    error.name = "BudgetExceededError";
+    error.spentUsd = spentUsd;
+    error.estimateUsd = estimateUsd;
+    error.dailyBudgetUsd = dailyBudgetUsd;
+    return error;
+  },
+  isBudgetExceededError: (error: unknown) =>
+    error instanceof Error && error.name === "BudgetExceededError",
 }));
 
 vi.mock("@pr-review/github", () => ({
@@ -95,6 +119,8 @@ describe("handleReviewJob", () => {
     failReview.mockReset();
     findPostedReviewByHead.mockReset();
     setGithubReviewId.mockReset();
+    emitAgentEvent.mockReset();
+    sumCostUsdUtcDay.mockReset();
     getDb.mockReset();
     runReviewGraph.mockReset();
     createGithubApp.mockReset();
@@ -111,6 +137,8 @@ describe("handleReviewJob", () => {
     insertReviewRunning.mockResolvedValue("review-1");
     findPostedReviewByHead.mockResolvedValue(null);
     setGithubReviewId.mockResolvedValue(undefined);
+    emitAgentEvent.mockResolvedValue("evt-1");
+    sumCostUsdUtcDay.mockResolvedValue(0);
     loadConfig.mockReturnValue({
       DATABASE_URL: "postgresql://local/test",
       REDIS_URL: "redis://localhost:6379",
@@ -121,6 +149,7 @@ describe("handleReviewJob", () => {
       GITHUB_PRIVATE_KEY: "k",
       AUTO_POST_ENABLED: false,
       HITL_CONFIDENCE_THRESHOLD: 0.75,
+      DAILY_BUDGET_USD: 20,
       EMBEDDING_BASE_URL: "http://127.0.0.1:8000/v1",
       EMBEDDING_API_KEY: "local",
       EMBEDDING_MODEL: "Qwen/Qwen3-Embedding-0.6B",
@@ -161,6 +190,7 @@ describe("handleReviewJob", () => {
         summaryMarkdown: "summary",
       },
       agentTimings: ["security:1ms", "quality:1ms", "tests:1ms", "docs:1ms"],
+      totalCostUsd: 0.004,
     });
   });
 
@@ -176,6 +206,10 @@ describe("handleReviewJob", () => {
     expect(runReviewGraph).toHaveBeenCalledWith(
       expect.objectContaining({
         repoContext: "### a.ts\n```\nx\n```",
+        hooks: expect.objectContaining({
+          onEvent: expect.any(Function),
+          checkBudget: expect.any(Function),
+        }),
       }),
     );
     expect(insertFindings).toHaveBeenCalled();
@@ -185,7 +219,16 @@ describe("handleReviewJob", () => {
       expect.objectContaining({
         status: "hitl_pending",
         outcome: "hitl_queue",
+        costUsd: "0.004",
       }),
+    );
+    expect(emitAgentEvent).toHaveBeenCalledWith(
+      {},
+      expect.objectContaining({ eventType: "review_start", reviewId: "review-1" }),
+    );
+    expect(emitAgentEvent).toHaveBeenCalledWith(
+      {},
+      expect.objectContaining({ eventType: "review_end", reviewId: "review-1" }),
     );
   });
 
@@ -230,6 +273,7 @@ describe("handleReviewJob", () => {
         summaryMarkdown: "Looks good.",
       },
       agentTimings: ["security:1ms"],
+      totalCostUsd: 0.01,
     });
     postPullRequestReview.mockResolvedValue({ githubReviewId: "gh-42" });
 
@@ -269,6 +313,13 @@ describe("handleReviewJob", () => {
         githubReviewId: "gh-42",
       }),
     );
+    expect(emitAgentEvent).toHaveBeenCalledWith(
+      {},
+      expect.objectContaining({
+        eventType: "github_post",
+        outcome: "posted",
+      }),
+    );
     const setOrder = setGithubReviewId.mock.invocationCallOrder[0] ?? 0;
     const finishOrder = finishReview.mock.invocationCallOrder[0] ?? 0;
     expect(setOrder).toBeLessThan(finishOrder);
@@ -286,6 +337,7 @@ describe("handleReviewJob", () => {
         summaryMarkdown: "Looks good.",
       },
       agentTimings: [],
+      totalCostUsd: 0,
     });
     findPostedReviewByHead.mockResolvedValue({
       id: "older-review",
@@ -303,6 +355,13 @@ describe("handleReviewJob", () => {
         githubReviewId: "gh-existing",
       }),
     );
+    expect(emitAgentEvent).toHaveBeenCalledWith(
+      {},
+      expect.objectContaining({
+        eventType: "github_post",
+        outcome: "skipped_duplicate",
+      }),
+    );
   });
 
   it("retries GitHub post on 500 then succeeds via withRetry", async () => {
@@ -317,6 +376,7 @@ describe("handleReviewJob", () => {
         summaryMarkdown: "Looks good.",
       },
       agentTimings: ["security:1ms"],
+      totalCostUsd: 0.01,
     });
     postPullRequestReview
       .mockRejectedValueOnce(
@@ -337,5 +397,79 @@ describe("handleReviewJob", () => {
         githubReviewId: "gh-after-retry",
       }),
     );
+  });
+
+  it("marks review failed when graph throws BudgetExceededError", async () => {
+    const { createBudgetExceededError } = await import("@pr-review/agents");
+    runReviewGraph.mockRejectedValue(createBudgetExceededError(20, 0.01, 20));
+
+    await expect(handleReviewJob(job)).rejects.toThrow(/budget/i);
+
+    expect(failReview).toHaveBeenCalled();
+    expect(emitAgentEvent).toHaveBeenCalledWith(
+      {},
+      expect.objectContaining({
+        eventType: "review_failed",
+        payload: expect.objectContaining({ budgetExceeded: true }),
+      }),
+    );
+  });
+
+  it("emits budget_block and throws when checkBudget is over cap", async () => {
+    sumCostUsdUtcDay.mockResolvedValue(20);
+    let hooks: { checkBudget?: (estimateUsd: number) => Promise<void> } | undefined;
+    runReviewGraph.mockImplementation(async (args: { hooks?: typeof hooks }) => {
+      hooks = args.hooks;
+      if (hooks?.checkBudget) {
+        await hooks.checkBudget(0.01);
+      }
+      return {
+        result: {
+          reviewId: "review-1",
+          prNumber: 3,
+          repo: "acme/api",
+          findings: [],
+          overallConfidence: 0,
+          outcome: "hitl_queue",
+          summaryMarkdown: "x",
+        },
+        agentTimings: [],
+        totalCostUsd: 0,
+      };
+    });
+
+    await expect(handleReviewJob(job)).rejects.toThrow(/budget/i);
+
+    expect(emitAgentEvent).toHaveBeenCalledWith(
+      {},
+      expect.objectContaining({
+        eventType: "budget_block",
+        agent: "budget",
+        payload: expect.objectContaining({
+          spentUsd: 20,
+          estimateUsd: 0.01,
+          dailyBudgetUsd: 20,
+        }),
+      }),
+    );
+    expect(failReview).toHaveBeenCalled();
+  });
+
+  it("does not put costUsd on review_end (billable only on llm_call)", async () => {
+    await handleReviewJob(job);
+
+    const reviewEndCall = emitAgentEvent.mock.calls.find(
+      (call) =>
+        typeof call[1] === "object" &&
+        call[1] !== null &&
+        (call[1] as { eventType?: string }).eventType === "review_end",
+    );
+    expect(reviewEndCall).toBeDefined();
+    const payload = reviewEndCall?.[1] as {
+      costUsd?: number | null;
+      payload?: { totalCostUsd?: number };
+    };
+    expect(payload.costUsd).toBeUndefined();
+    expect(payload.payload?.totalCostUsd).toBe(0.004);
   });
 });

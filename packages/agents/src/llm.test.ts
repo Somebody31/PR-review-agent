@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { z } from "zod";
+import { DEFAULT_LLM_ESTIMATE_USD } from "./budget.js";
 import { completeStructured, estimateCostUsd } from "./llm.js";
 
 const findingsSchema = z.array(
@@ -111,5 +112,87 @@ describe("completeStructured", () => {
     ).rejects.toThrow(/failed after retry/);
 
     expect(fetchImpl).toHaveBeenCalledTimes(2);
+  });
+
+  it("calls checkBudget before the LLM HTTP request", async () => {
+    const checkBudget = vi.fn(async () => {
+      // allow
+    });
+    const fetchImpl = vi.fn(async () => {
+      return new Response(
+        JSON.stringify({
+          choices: [{ message: { content: JSON.stringify([{ summary: "ok" }]) } }],
+          usage: { prompt_tokens: 1, completion_tokens: 1 },
+        }),
+        { status: 200 },
+      );
+    });
+
+    await completeStructured({
+      apiKey: "test",
+      baseUrl: "https://example.test/v1",
+      model: "m",
+      system: "s",
+      user: "u",
+      schema: findingsSchema,
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+      checkBudget,
+      budgetEstimateUsd: 0.02,
+    });
+
+    expect(checkBudget).toHaveBeenCalledWith(0.02);
+    expect(checkBudget.mock.invocationCallOrder[0]!).toBeLessThan(
+      fetchImpl.mock.invocationCallOrder[0]!,
+    );
+  });
+
+  it("does not call fetch when checkBudget throws", async () => {
+    const checkBudget = vi.fn(async () => {
+      throw new Error("Daily budget exceeded");
+    });
+    const fetchImpl = vi.fn();
+
+    await expect(
+      completeStructured({
+        apiKey: "test",
+        baseUrl: "https://example.test/v1",
+        model: "m",
+        system: "s",
+        user: "u",
+        schema: findingsSchema,
+        fetchImpl: fetchImpl as unknown as typeof fetch,
+        checkBudget,
+      }),
+    ).rejects.toThrow(/Daily budget exceeded/);
+
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it("defaults budgetEstimateUsd to DEFAULT_LLM_ESTIMATE_USD", async () => {
+    const checkBudget = vi.fn(async () => {
+      // allow
+    });
+    const fetchImpl = vi.fn(async () => {
+      return new Response(
+        JSON.stringify({
+          choices: [{ message: { content: JSON.stringify([{ summary: "ok" }]) } }],
+          usage: { prompt_tokens: 1, completion_tokens: 1 },
+        }),
+        { status: 200 },
+      );
+    });
+
+    await completeStructured({
+      apiKey: "test",
+      baseUrl: "https://example.test/v1",
+      model: "m",
+      system: "s",
+      user: "u",
+      schema: findingsSchema,
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+      checkBudget,
+    });
+
+    expect(checkBudget).toHaveBeenCalledWith(DEFAULT_LLM_ESTIMATE_USD);
   });
 });

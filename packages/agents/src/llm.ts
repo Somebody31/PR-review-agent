@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { DEFAULT_LLM_ESTIMATE_USD } from "./budget.js";
 
 export type TokenUsage = {
   tokensIn: number;
@@ -40,6 +41,7 @@ export function estimateCostUsd(model: string, usage: TokenUsage): number {
 /**
  * Call an OpenAI-compatible chat API and parse JSON into a Zod schema.
  * Retries once when the model returns invalid JSON / schema mismatch.
+ * Optional checkBudget runs before each HTTP call (BudgetGuard).
  */
 export async function completeStructured<T>(args: {
   apiKey: string;
@@ -50,9 +52,18 @@ export async function completeStructured<T>(args: {
   schema: z.ZodType<T>;
   maxTokens?: number;
   fetchImpl?: typeof fetch;
+  /** Hard-block when daily spend would exceed cap. */
+  checkBudget?: (estimateUsd: number) => Promise<void>;
+  /** USD estimate passed to checkBudget when tokens are unknown. */
+  budgetEstimateUsd?: number;
 }): Promise<StructuredLlmResult<T>> {
   const fetchFn = args.fetchImpl ?? fetch;
   const maxTokens = args.maxTokens ?? 4096;
+  const budgetEstimateUsd = args.budgetEstimateUsd ?? DEFAULT_LLM_ESTIMATE_USD;
+
+  if (args.checkBudget) {
+    await args.checkBudget(budgetEstimateUsd);
+  }
 
   const first = await callOnce({
     fetchFn,
@@ -75,6 +86,10 @@ export async function completeStructured<T>(args: {
   }
 
   // One repair attempt with the validation error shown to the model
+  if (args.checkBudget) {
+    await args.checkBudget(budgetEstimateUsd);
+  }
+
   const repairUser =
     args.user +
     "\n\nYour previous JSON was invalid:\n" +

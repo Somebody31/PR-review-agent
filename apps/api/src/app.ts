@@ -7,10 +7,23 @@ import {
   reviewJobId,
   type ReviewQueue,
 } from "@pr-review/core";
-import { getDb, pingDb, webhookDeliveries, type Database } from "@pr-review/db";
+import {
+  economicsSummary,
+  eventsSummaryForReview,
+  getDb,
+  getReviewById,
+  listEventsForReview,
+  listHitlItems,
+  listReviews,
+  pingDb,
+  reviewExists,
+  webhookDeliveries,
+  type Database,
+} from "@pr-review/db";
 import { parsePullRequestEvent, verifyWebhookSignature } from "@pr-review/github";
 import type { ReviewJob } from "@pr-review/shared";
 import { eq } from "drizzle-orm";
+import { requireApiAuth } from "./auth.js";
 import { isUniqueViolation } from "./unique-violation.js";
 
 const logger = createLogger({ name: "api" });
@@ -25,6 +38,7 @@ export function createApp(): Hono {
   const db = getDb(config.DATABASE_URL);
   const webhookSecret = config.GITHUB_WEBHOOK_SECRET;
   const databaseUrl = config.DATABASE_URL;
+  const apiAuthToken = config.API_AUTH_TOKEN;
 
   app.get("/health", async (c: Context): Promise<Response> => {
     const dbOk = await pingDb(databaseUrl);
@@ -33,6 +47,78 @@ export function createApp(): Hono {
 
   app.post("/webhooks/github", async (c: Context): Promise<Response> => {
     return handleGithubWebhook(c, webhookSecret, db, queue);
+  });
+
+  // --- Phase 7 REST read API (Bearer API_AUTH_TOKEN) ---
+
+  app.get("/api/reviews", async (c: Context): Promise<Response> => {
+    const denied = requireApiAuth(c, apiAuthToken);
+    if (denied) {
+      return denied;
+    }
+    const limitRaw = c.req.query("limit");
+    const limit = limitRaw ? Number(limitRaw) : 50;
+    const reviews = await listReviews(db, Number.isFinite(limit) ? limit : 50);
+    return c.json({ reviews });
+  });
+
+  app.get("/api/reviews/:id", async (c: Context): Promise<Response> => {
+    const denied = requireApiAuth(c, apiAuthToken);
+    if (denied) {
+      return denied;
+    }
+    const id = c.req.param("id") ?? "";
+    if (!id) {
+      return c.json({ error: "missing review id" }, 400);
+    }
+    const review = await getReviewById(db, id);
+    if (!review) {
+      return c.json({ error: "not found" }, 404);
+    }
+    // SQL aggregate only (event count + llm_call billable cost) — not the full timeline
+    const eventsSummary = await eventsSummaryForReview(db, id);
+    return c.json({
+      review,
+      eventsSummary,
+    });
+  });
+
+  app.get("/api/reviews/:id/events", async (c: Context): Promise<Response> => {
+    const denied = requireApiAuth(c, apiAuthToken);
+    if (denied) {
+      return denied;
+    }
+    const id = c.req.param("id") ?? "";
+    if (!id) {
+      return c.json({ error: "missing review id" }, 400);
+    }
+    // Existence only — avoid loading findings just to gate the timeline
+    const exists = await reviewExists(db, id);
+    if (!exists) {
+      return c.json({ error: "not found" }, 404);
+    }
+    const events = await listEventsForReview(db, id);
+    return c.json({ reviewId: id, events });
+  });
+
+  app.get("/api/economics/summary", async (c: Context): Promise<Response> => {
+    const denied = requireApiAuth(c, apiAuthToken);
+    if (denied) {
+      return denied;
+    }
+    const summary = await economicsSummary(db);
+    return c.json(summary);
+  });
+
+  app.get("/api/hitl", async (c: Context): Promise<Response> => {
+    const denied = requireApiAuth(c, apiAuthToken);
+    if (denied) {
+      return denied;
+    }
+    const limitRaw = c.req.query("limit");
+    const limit = limitRaw ? Number(limitRaw) : 50;
+    const items = await listHitlItems(db, Number.isFinite(limit) ? limit : 50);
+    return c.json({ items });
   });
 
   return app;
