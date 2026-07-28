@@ -13,6 +13,8 @@
   },
   "dependencies": {
     "@pr-review/core": "workspace:*",
+    "@pr-review/db": "workspace:^",
+    "@pr-review/github": "workspace:^",
     "@pr-review/shared": "workspace:*",
     "bullmq": "^5.41.0"
   },

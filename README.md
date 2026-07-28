@@ -50,10 +50,11 @@ Local Qwen embed server is **not** in docker-compose — start it separately bef
 | **0** | Foundations | **Done** |
 | **1** | Data spine | **Done** |
 | **2** | Ingress & queue | **Done** (HMAC webhook, delivery idempotency, BullMQ, worker skeleton) |
-| 3 | Context pipeline | Not started |
-| 4+ | Agents → … | Not started |
+| **3** | Context pipeline | **Done** (GitHub App auth, PR context fetch, review shell) |
+| 4 | Agents & LangGraph | Not started |
+| 5+ | RAG → … | Not started |
 
-**Next:** Phase **3** — GitHub App auth, fetch PR context, persist `pr_reviews` shell.
+**Next:** Phase **4** — DeepSeek structured LLM, four specialists, LangGraph aggregate, persist findings.
 
 Docker Compose green gate: run `docker compose up -d` where Docker is available (not verified on all machines).
 

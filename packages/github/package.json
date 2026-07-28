@@ -18,6 +18,7 @@
     "lint": "echo \"no lint config yet\""
   },
   "dependencies": {
+    "@octokit/app": "^16.1.2",
     "@pr-review/shared": "workspace:*"
   },
   "devDependencies": {
