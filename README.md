@@ -1,216 +1,203 @@
 # PR Review Agent
 
-Production-oriented **AI pull request review agent** in **TypeScript**.
-
-GitHub PR → verify webhook → queue → LangGraph (four specialists: security, quality, tests, docs) with local Qwen3 RAG → merge & confidence gate → post review or HITL → full event/cost trail.
-
-**Chat model:** DeepSeek V4 Flash (official API)  
-**Embeddings:** Qwen3 Embedding (local OpenAI-compatible server)  
-**Orchestration:** LangGraph.js  
-**UI:** Next.js ops dashboard (`apps/web`) — server-side REST client (token never in browser)
-
-## Monorepo layout
+AI-assisted pull request review for GitHub. A TypeScript monorepo that receives webhooks, runs four specialist agents, and either posts a review or queues it for human approval.
 
 ```
-apps/api          Hono — webhooks + REST (HITL write + dispute)
-apps/worker       BullMQ + LangGraph review
-apps/web          Next.js dashboard (reviews, HITL, trace, economics)
-packages/shared   Zod contracts
-packages/core     config + logger + queue + secret mask
-packages/db       Drizzle + pgvector schema
-packages/github   Webhook HMAC, App auth, PR context
-packages/agents   DeepSeek LLM, prompts, LangGraph graph
-packages/memory   Chunk, hash, Qwen embed, index, retrieve
-packages/evaluation  Golden fixtures + offline eval gate
+GitHub PR → webhook → queue → specialists (+ optional RAG) → post or HITL → events & cost trail
 ```
+
+| Layer | Choice |
+|-------|--------|
+| Chat model | DeepSeek V4 Flash |
+| Embeddings | Local Qwen3 (OpenAI-compatible server) |
+| Orchestration | LangGraph.js |
+| API | Hono |
+| Queue | BullMQ + Redis |
+| Data | Postgres + pgvector |
+| Dashboard | Next.js (`apps/web`) |
+
+---
+
+## Features
+
+- **Webhook ingress** — HMAC verification, delivery idempotency, light rate limiting
+- **Four specialists** — security, quality, tests, and docs (parallel), then merge + confidence gate
+- **Optional RAG** — index changed files with local embeddings; soft-fails if the embed server is down
+- **GitHub reviews** — severity-grouped body, diff-aware inline comments, retries, idempotent by head SHA
+- **Human-in-the-loop** — approve (post) or reject (no post); claim-before-post; finding disputes without auto prompt changes
+- **Budget guard** — daily UTC spend cap on billable `llm_call` events
+- **Ops surface** — REST API + dashboard (reviews, timeline, HITL queue, economics)
+- **Quality gate** — offline golden eval (`pnpm eval`) in CI
+
+Auto-post defaults to **off** (`AUTO_POST_ENABLED=false`). Enable only after eval and staging confidence look good.
+
+---
+
+## Repository layout
+
+```
+apps/api           Webhooks + REST API
+apps/worker        BullMQ consumer + review pipeline
+apps/web           Ops dashboard (port 3001)
+packages/shared    Shared contracts (Zod)
+packages/core      Config, logger, queue, secret masking
+packages/db        Drizzle schema and queries
+packages/github    GitHub App, webhooks, PR context, post review
+packages/agents    LLM, prompts, LangGraph graph, aggregation
+packages/memory    Chunk, embed, index, retrieve
+packages/evaluation Offline fixtures and eval runner
+```
+
+---
 
 ## Quick start
 
-```bash
-# Install
-pnpm install
-
-# Typecheck & tests
-pnpm typecheck
-pnpm test
-
-# Offline golden eval (no LLM keys required)
-pnpm eval
-
-# Infra (requires Docker)
-docker compose up -d
-pnpm db:migrate
-
-# Optional: copy env
-cp .env.example .env
-
-# API + worker (needs DATABASE_URL + REDIS_URL + secrets)
-pnpm --filter @pr-review/api dev
-pnpm --filter @pr-review/worker dev
-
-# Dashboard (port 3001) — needs API running + same API_AUTH_TOKEN
-pnpm dev:web
-# Or all three: pnpm dev:all
-```
-
-Local Qwen embed server is **not** in docker-compose — start it separately before RAG (Phase 5).
-
-## Status
-
-| Phase | Name | Status |
-|-------|------|--------|
-| **0** | Foundations | **Done** |
-| **1** | Data spine | **Done** |
-| **2** | Ingress & queue | **Done** |
-| **3** | Context pipeline | **Done** |
-| **4** | Agents & LangGraph | **Done** |
-| **5** | Memory & RAG | **Done** (chunk/hash, local Qwen embed, incremental index, vector retrieve → `repoContext`) |
-| **6** | Posting & reliability | **Done** (`withRetry`, GitHub PR review post, idempotent by head SHA) |
-| **7** | Events, budget, REST | **Done** (`agent_events`, BudgetGuard UTC day, REST read API) |
-| **8** | HITL write, security, evals | **Done** (HITL approve/reject, dispute, secret mask, golden eval) |
-| **9** | CI & ops | **Done** (GitHub Actions CI, runbook, light learning hooks notes) |
-| **10** | Dashboard UI | **Done** (Next.js `apps/web`: reviews, HITL, trace, economics) |
-
-**MVP backend 0–9 + thin dashboard (Phase 10).** Agent loop remains API + worker; UI is a server-side client of the REST API.
-
-### Phase 10 notes
-
-- **App:** `apps/web` (Next.js App Router) on port **3001**.
-- **Pages:** `/` reviews list · `/reviews/[id]` findings + dispute · `/reviews/[id]/trace` event timeline · `/hitl` approve/reject · `/economics` cost tables.
-- **Auth:** server-only `API_AUTH_TOKEN` + `API_BASE_URL` (never sent to the browser). Mutations use Server Actions → REST.
-- **Boundary:** dashboard talks to Hono REST only (no direct DB from Next). Prefer `pnpm --filter @pr-review/api dev` before opening the UI.
-- No GitHub OAuth yet (token-in-env for ops); no chart library (tables only).
-
-### Phase 9 notes
-
-- **CI:** `.github/workflows/ci.yml` runs `pnpm install --frozen-lockfile`, `pnpm typecheck`, `pnpm test`, and `pnpm eval` on push/PR to `master`/`main`.
-- **Runbook:** see [Operations runbook](#operations-runbook) below.
-- **Learning hooks (light):** weekly dispute/rejection rates by agent via SQL on `hitl_feedback` / `agent_events` (documented in runbook). Prompt changes require a new prompt version + green `pnpm eval` before promote. No automatic prompt mutation from a single dispute.
-
-### Phase 8 notes
-
-- **HITL queue:** worker inserts `hitl_items` when outcome is `hitl_queue` or `critical_escalate` (no auto post).
-- REST (Bearer `API_AUTH_TOKEN`):
-  - `GET /api/hitl` — list queue
-  - `POST /api/hitl/:id/approve` — post review to GitHub, mark approved
-  - `POST /api/hitl/:id/reject` — close without post (optional JSON `{ "comment" }`)
-  - `POST /api/findings/:id/dispute` — store `hitl_feedback` only (no auto prompt change)
-- **Security:** `maskSecrets()` redacts PEM keys / GitHub tokens / `sk-` keys / Bearer tokens in logs, agent event error payloads, and LLM user messages. App secrets (`GITHUB_PRIVATE_KEY`, webhook secret) are never put into LLM prompts — only PR title/body/diff/RAG context. Webhook path is HMAC-verified, delivery-idempotent, and lightly rate-limited per IP (60/min). Local threat model: `docs/SECURITY.md` (not in git).
-- **HITL approve/reject:** claim `pending→approved|rejected` **before** any GitHub post (approve) so concurrent reject cannot leave a post while HITL is rejected. Idempotent by head SHA (reuses `github_review_id`). Retries when HITL is already approved/rejected still call `finishReview` if `pr_reviews` is stuck `hitl_pending`. Finish sets `outcome=auto_post` (approve) or `hitl_rejected` (reject) with `status=completed`.
-- **Dispute / learning (8.2):** single disputes are stored only — **no** automatic prompt or policy mutation. Future continuous learning (Phase 9) must require a **minimum evidence threshold** before any change (suggested baseline: ≥5 disputes for the same agent+category within 30 days, plus human review of the batch). One-off or sparse disputes never auto-tune.
-- **Eval:** `packages/evaluation` has 6 synthetic fixture diffs + specialist prompt contract checks; `pnpm eval` fails if precision/recall fall below thresholds (default P≥0.7, R≥0.8) **or** a specialist prompt loses required focus language.
-- **Auto-post:** keep `AUTO_POST_ENABLED=false` until golden eval is green on your prompts/model **and** you accept HITL rate in staging. Enable only after monitoring dispute rate; CRITICAL still escalates regardless.
-- Dashboard was deferred in MVP (ADR-009); shipped later as Phase 10.
-
-### Phase 7 notes
-
-- `emitAgentEvent` + helpers in `@pr-review/db`; timeline queryable by `review_id`.
-- Worker emits `review_start` / `review_end` / `review_failed` / `github_post`; agents emit `agent_start` / `llm_call` / `agent_end` / `aggregate`.
-- **BudgetGuard:** sums billable `cost_usd` on **`llm_call` only** for the **UTC calendar day** (not `agent_end` / `review_end`); before each LLM call if `spent + estimate > DAILY_BUDGET_USD` → budget error, review `failed`, `budget_block` event.
-- REST (Bearer `API_AUTH_TOKEN`): `GET /api/reviews`, `/api/reviews/:id`, `/api/reviews/:id/events`, `/api/economics/summary`, `/api/hitl`.
-
-### Phase 6 notes
-
-- Worker posts a GitHub PR review **only** when outcome is `auto_post`.
-- `AUTO_POST_ENABLED` still defaults to **false** (aggregator forces `hitl_queue` until enabled).
-- Post uses `withRetry` (exponential backoff + jitter) on retryable HTTP errors.
-- Idempotent: `findPostedReviewByHead` skips a second post for the same owner/repo/PR/head SHA and reuses `github_review_id`.
-- `github_review_id` is written via `setGithubReviewId` immediately after a successful post (before `finishReview`) so a crash does not re-post duplicates.
-- Review body groups findings by severity; inline comments only when `filePath` + `lineStart` appear in the PR patch (else body-only listing).
-- If GitHub rejects inline comments, the post falls back to a body-only review so findings still land on the PR.
-- `REQUEST_CHANGES` only for CRITICAL/HIGH; otherwise `COMMENT`.
-
-### Phase 5 notes
-
-- Worker indexes changed PR files when content hash changes; soft-fails if the embed server is down (diff-only review still runs).
-- Retrieved chunks are injected into specialist prompts under repository context.
-- Embeddings: OpenAI-compatible `POST {EMBEDDING_BASE_URL}/embeddings` (default Qwen3 local).
-
-## Operations runbook
-
-### Fresh environment
+**Requirements:** Node 22+, pnpm 9, Docker (Postgres + Redis).
 
 ```bash
-# 1. Clone + install
 git clone git@github.com:Somebody31/PR-review-agent.git
 cd PR-review-agent
 pnpm install
 
-# 2. Infra
-docker compose up -d
 cp .env.example .env
-# Edit .env: DATABASE_URL, REDIS_URL, GITHUB_*, DEEPSEEK_API_KEY, API_AUTH_TOKEN
+# Set DATABASE_URL, REDIS_URL, GITHUB_*, DEEPSEEK_API_KEY, API_AUTH_TOKEN
 
-# 3. Schema
+docker compose up -d
 pnpm db:migrate
 
-# 4. Processes
-pnpm --filter @pr-review/api dev
+pnpm --filter @pr-review/api dev      # http://127.0.0.1:3000
 pnpm --filter @pr-review/worker dev
-pnpm dev:web   # dashboard http://127.0.0.1:3001
-
-# 5. Optional RAG (local Qwen OpenAI-compatible embeddings)
-# Point EMBEDDING_BASE_URL at your server (default http://127.0.0.1:8000/v1)
+pnpm dev:web                         # http://127.0.0.1:3001
+# or: pnpm dev:all
 ```
 
-### Env checklist
+Point your GitHub App webhook at `POST /webhooks/github` with the same `GITHUB_WEBHOOK_SECRET`.
 
-| Variable | Required for |
-|----------|----------------|
-| `DATABASE_URL` | API + worker |
-| `REDIS_URL` | API enqueue + worker |
-| `GITHUB_WEBHOOK_SECRET` | Webhook HMAC |
-| `GITHUB_APP_ID` / `GITHUB_PRIVATE_KEY` | PR fetch + post |
-| `DEEPSEEK_API_KEY` | Agents |
-| `API_AUTH_TOKEN` | REST / HITL mutations + web server |
-| `API_BASE_URL` | Web dashboard → API (default `http://127.0.0.1:3000`) |
-| `AUTO_POST_ENABLED` | Default `false` — keep off until eval + staging OK |
-| `HITL_CONFIDENCE_THRESHOLD` | Default `0.75` |
-| `DAILY_BUDGET_USD` | Default `20` (UTC day, `llm_call` costs) |
-| `EMBEDDING_*` | RAG only (soft-fail if down) |
+Local embeddings are **not** started by docker-compose. Set `EMBEDDING_*` if you run a Qwen-compatible server; otherwise reviews still run on the PR diff only.
 
-### Scale workers
-
-- Start more worker processes with the same `REDIS_URL` / `DATABASE_URL`.
-- BullMQ concurrency defaults low (1) in worker bootstrap — raise carefully vs LLM budget.
-
-### Rotate GitHub webhook secret
-
-1. Generate a new secret in the GitHub App / webhook settings.
-2. Set `GITHUB_WEBHOOK_SECRET` on the API and restart.
-3. Old deliveries already stored by id stay idempotent; no DB wipe needed.
-
-### Replay failed jobs
-
-- Inspect BullMQ failed set (Redis) or re-deliver the webhook from GitHub (same `X-GitHub-Delivery` is ignored as duplicate — use a new delivery or delete that row only if you intend a full re-run).
-- For a new review of the same PR head, push a new commit (new head SHA) or clear `github_review_id` only when you knowingly accept a second post.
-
-### HITL ops
+### Checks
 
 ```bash
-# List queue
-curl -s -H "Authorization: Bearer $API_AUTH_TOKEN" http://localhost:3000/api/hitl
+pnpm typecheck
+pnpm test
+pnpm eval    # offline; no live LLM keys required
+```
 
-# Approve (posts to GitHub when not already posted for that head)
+CI runs the same gates on push/PR (see `.github/workflows/ci.yml`).
+
+---
+
+## Configuration
+
+| Variable | Purpose |
+|----------|---------|
+| `DATABASE_URL` | Postgres connection |
+| `REDIS_URL` | BullMQ |
+| `PORT` | API listen port (default `3000`) |
+| `GITHUB_APP_ID` / `GITHUB_PRIVATE_KEY` | PR fetch and review post |
+| `GITHUB_WEBHOOK_SECRET` | Webhook HMAC |
+| `DEEPSEEK_API_KEY` | Specialist agents |
+| `DEEPSEEK_BASE_URL` / `LLM_MODEL` | Chat API (defaults set for DeepSeek Flash) |
+| `API_AUTH_TOKEN` | Bearer token for REST and dashboard server |
+| `API_BASE_URL` | Dashboard → API (default `http://127.0.0.1:3000`) |
+| `AUTO_POST_ENABLED` | Auto-post when confidence allows (default `false`) |
+| `HITL_CONFIDENCE_THRESHOLD` | Default `0.75` |
+| `DAILY_BUDGET_USD` | UTC-day LLM spend cap (default `20`) |
+| `EMBEDDING_*` | Optional RAG |
+
+See `.env.example` for the full template.
+
+---
+
+## How it works
+
+1. **Ingress** — GitHub sends a `pull_request` event. The API verifies the signature, records the delivery id, and enqueues a job.
+2. **Context** — The worker loads the PR via the GitHub App and optionally retrieves RAG context.
+3. **Review** — Four specialists run in parallel (budget checked before each LLM call), then findings are aggregated.
+4. **Outcome**
+   - `auto_post` — post a GitHub review (when enabled and confidence is high enough)
+   - `hitl_queue` / `critical_escalate` — queue for a human; no automatic post
+   - `failed` — hard error or budget block
+5. **HITL** — Approve posts (claim state first); reject closes without posting. Disputes store feedback only.
+6. **Observability** — `agent_events` record timeline and billable cost; REST and the dashboard expose the same data.
+
+The dashboard is a **server-side** client of the API. `API_AUTH_TOKEN` is never sent to the browser.
+
+---
+
+## HTTP API
+
+All routes below (except `/health` and the webhook) require:
+
+```http
+Authorization: Bearer <API_AUTH_TOKEN>
+```
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/health` | Liveness + DB ping |
+| `POST` | `/webhooks/github` | GitHub webhook |
+| `GET` | `/api/reviews` | List reviews |
+| `GET` | `/api/reviews/:id` | Review + findings + event summary |
+| `GET` | `/api/reviews/:id/events` | Event timeline |
+| `GET` | `/api/economics/summary` | Cost by agent and day |
+| `GET` | `/api/hitl` | HITL queue |
+| `POST` | `/api/hitl/:id/approve` | Approve and post |
+| `POST` | `/api/hitl/:id/reject` | Reject without post (`{ "comment" }` optional) |
+| `POST` | `/api/findings/:id/dispute` | Record dispute feedback |
+
+### HITL examples
+
+```bash
+curl -s -H "Authorization: Bearer $API_AUTH_TOKEN" \
+  http://127.0.0.1:3000/api/hitl
+
 curl -s -X POST -H "Authorization: Bearer $API_AUTH_TOKEN" \
-  http://localhost:3000/api/hitl/<hitlId>/approve
+  http://127.0.0.1:3000/api/hitl/<hitlId>/approve
 
-# Reject (no GitHub post)
 curl -s -X POST -H "Authorization: Bearer $API_AUTH_TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"comment":"not useful"}' \
-  http://localhost:3000/api/hitl/<hitlId>/reject
+  http://127.0.0.1:3000/api/hitl/<hitlId>/reject
 ```
 
-### Budget tripped
+### Dashboard
 
-- Review `agent_events` with `event_type = 'budget_block'` and `llm_call` costs for the UTC day.
-- Raise `DAILY_BUDGET_USD` or wait until next UTC day; failed reviews stay `failed`.
+| Path | View |
+|------|------|
+| `/` | Reviews |
+| `/reviews/[id]` | Findings and dispute |
+| `/reviews/[id]/trace` | Event timeline |
+| `/hitl` | Approve / reject |
+| `/economics` | Cost tables |
 
-### Weekly learning query (manual)
+---
+
+## Operations
+
+### Scale workers
+
+Run more worker processes with the same `REDIS_URL` and `DATABASE_URL`. Keep concurrency low relative to `DAILY_BUDGET_USD`.
+
+### Rotate webhook secret
+
+1. Create a new secret in the GitHub App settings.
+2. Update `GITHUB_WEBHOOK_SECRET` and restart the API.
+3. Existing delivery ids remain idempotent; no database wipe required.
+
+### Replay a review
+
+Re-deliver from GitHub only works with a **new** delivery id (duplicates are ignored). For a new review of the same PR tip, push a commit (new head SHA) or intentionally clear post state if you accept a second GitHub review.
+
+### Budget limit hit
+
+Inspect `agent_events` for `budget_block` and `llm_call` costs for the current UTC day. Raise `DAILY_BUDGET_USD` or wait for the next UTC day. Failed reviews stay `failed`.
+
+### Prompt changes
+
+Do not auto-tune prompts from a single dispute. Promote only after a new prompt version, green `pnpm eval`, and a batch review of related disputes (for example ≥5 for the same agent and category within 30 days).
 
 ```sql
--- Dispute rate by agent (last 7 days)
 SELECT f.agent_type, count(*) AS disputes
 FROM hitl_feedback fb
 JOIN findings f ON f.id = fb.finding_id
@@ -220,14 +207,17 @@ GROUP BY f.agent_type
 ORDER BY disputes DESC;
 ```
 
-Promote a prompt change only after: new version in agents prompts + green `pnpm eval` + review of disputes (≥5 same agent+category / 30 days suggested).
+---
 
-### Health
+## Security notes
 
-```bash
-curl -s http://localhost:3000/health
-```
+- Webhook path is HMAC-verified and delivery-idempotent.
+- REST and dashboard mutations require `API_AUTH_TOKEN`.
+- `maskSecrets` redacts common secret shapes in logs, event payloads, and LLM user text.
+- App private keys and webhook secrets are never sent to the model; prompts use PR content and optional RAG context only.
+
+---
 
 ## License
 
-TBD
+Private repository. License TBD.
