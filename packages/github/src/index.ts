@@ -24,6 +24,7 @@ export {
   decideReviewEvent,
   parsePatchRightLines,
   collectCommentableLines,
+  toShortReviewIntro,
   type ReviewsOctokit,
   type PostPullRequestReviewInput,
   type PostPullRequestReviewResult,
