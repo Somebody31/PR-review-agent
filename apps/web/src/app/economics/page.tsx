@@ -1,5 +1,5 @@
 import type { ReactElement } from "react";
-import { ApiErrorBox } from "@/components/ApiErrorBox";
+import { ApiErrorBox, formatLoadError } from "@/components/ApiErrorBox";
 import { getEconomics } from "@/lib/api";
 import { formatUsd } from "@/lib/format";
 
@@ -12,7 +12,7 @@ export default async function EconomicsPage(): Promise<ReactElement> {
       <>
         <h1>Economics</h1>
         <p className="lead">Billable LLM spend (llm_call events only).</p>
-        <ApiErrorBox error={error} context="economics" />
+        <ApiErrorBox message={formatLoadError(error)} context="economics" />
       </>
     );
   }

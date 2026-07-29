@@ -1,6 +1,6 @@
 import type { ReactElement } from "react";
 import Link from "next/link";
-import { ApiErrorBox } from "@/components/ApiErrorBox";
+import { ApiErrorBox, formatLoadError } from "@/components/ApiErrorBox";
 import { StatusBadge } from "@/components/StatusBadge";
 import { listReviews } from "@/lib/api";
 import {
@@ -20,7 +20,7 @@ export default async function ReviewsPage(): Promise<ReactElement> {
       <>
         <h1>Reviews</h1>
         <p className="lead">Recent PR review runs from the API.</p>
-        <ApiErrorBox error={error} context="reviews" />
+        <ApiErrorBox message={formatLoadError(error)} context="reviews" />
       </>
     );
   }

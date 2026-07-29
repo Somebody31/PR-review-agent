@@ -1,6 +1,6 @@
 import type { ReactElement } from "react";
 import Link from "next/link";
-import { ApiErrorBox } from "@/components/ApiErrorBox";
+import { ApiErrorBox, formatLoadError } from "@/components/ApiErrorBox";
 import { HitlActions } from "@/components/HitlActions";
 import { StatusBadge } from "@/components/StatusBadge";
 import { listHitl } from "@/lib/api";
@@ -17,7 +17,7 @@ export default async function HitlPage(): Promise<ReactElement> {
         <p className="lead">
           Human-in-the-loop items waiting for approve (post) or reject.
         </p>
-        <ApiErrorBox error={error} context="HITL queue" />
+        <ApiErrorBox message={formatLoadError(error)} context="HITL queue" />
       </>
     );
   }

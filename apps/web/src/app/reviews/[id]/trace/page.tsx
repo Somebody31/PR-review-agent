@@ -1,6 +1,6 @@
 import type { ReactElement } from "react";
 import Link from "next/link";
-import { ApiErrorBox } from "@/components/ApiErrorBox";
+import { ApiErrorBox, formatLoadError } from "@/components/ApiErrorBox";
 import { StatusBadge } from "@/components/StatusBadge";
 import { listReviewEvents } from "@/lib/api";
 import { formatConfidence, formatUsd, formatWhen } from "@/lib/format";
@@ -17,7 +17,10 @@ export default async function TracePage(props: {
     return (
       <>
         <h1>Event timeline</h1>
-        <ApiErrorBox error={error} context="event timeline" />
+        <ApiErrorBox
+          message={formatLoadError(error)}
+          context="event timeline"
+        />
         <p>
           <Link href={`/reviews/${id}`}>← Back to review</Link>
         </p>

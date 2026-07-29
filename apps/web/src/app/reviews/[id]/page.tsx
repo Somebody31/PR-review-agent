@@ -1,6 +1,6 @@
 import type { ReactElement } from "react";
 import Link from "next/link";
-import { ApiErrorBox } from "@/components/ApiErrorBox";
+import { ApiErrorBox, formatLoadError } from "@/components/ApiErrorBox";
 import { DisputeForm } from "@/components/DisputeForm";
 import { SeverityBadge, StatusBadge } from "@/components/StatusBadge";
 import { getReview } from "@/lib/api";
@@ -24,7 +24,7 @@ export default async function ReviewDetailPage(props: {
     return (
       <>
         <h1>Review</h1>
-        <ApiErrorBox error={error} context="review detail" />
+        <ApiErrorBox message={formatLoadError(error)} context="review detail" />
         <p>
           <Link href="/">← Back to reviews</Link>
         </p>
