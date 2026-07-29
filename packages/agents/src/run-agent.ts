@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
+import { maskSecrets } from "@pr-review/core";
 import type { PrContext } from "@pr-review/github";
 import { findingSchema, type AgentType, type Finding } from "@pr-review/shared";
 import { DEFAULT_LLM_ESTIMATE_USD } from "./budget.js";
@@ -110,6 +111,8 @@ export async function runSpecialistAgent(args: {
   } catch (error: unknown) {
     const latencyMs = Date.now() - started;
     const message = error instanceof Error ? error.message : String(error);
+    // Events may be stored/queried; never leave raw key-shaped text in payload
+    const safeMessage = maskSecrets(message);
 
     await emitHookEvent(args.hooks, {
       eventType: "agent_end",
@@ -117,7 +120,7 @@ export async function runSpecialistAgent(args: {
       spanId,
       latencyMs,
       outcome: "error",
-      payload: { error: message.slice(0, 500) },
+      payload: { error: safeMessage.slice(0, 500) },
     });
 
     throw error;
@@ -126,6 +129,8 @@ export async function runSpecialistAgent(args: {
 
 /**
  * Build the user message with PR title/body, per-file patches, and optional RAG context.
+ * Masks secret-shaped substrings so PEM keys / tokens in untrusted PR text are not sent raw.
+ * App config secrets (GITHUB_PRIVATE_KEY, webhook secret) are never passed into this path.
  */
 export function buildUserMessage(prContext: PrContext, repoContext?: string): string {
   const parts: string[] = [];
@@ -157,5 +162,6 @@ export function buildUserMessage(prContext: PrContext, repoContext?: string): st
   }
 
   parts.push(`Return JSON findings for agent focus only. Empty array is fine.`);
-  return parts.join("\n");
+  // Defense in depth: PR body/diff is untrusted and may paste secrets
+  return maskSecrets(parts.join("\n"));
 }

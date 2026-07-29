@@ -4,6 +4,7 @@ import { handleReviewJob } from "./handle-review-job.js";
 
 const insertReviewRunning = vi.fn();
 const insertFindings = vi.fn();
+const insertHitlItem = vi.fn();
 const finishReview = vi.fn();
 const failReview = vi.fn();
 const findPostedReviewByHead = vi.fn();
@@ -25,6 +26,7 @@ const formatRetrievedContext = vi.fn();
 vi.mock("@pr-review/db", () => ({
   insertReviewRunning: (...args: unknown[]) => insertReviewRunning(...args),
   insertFindings: (...args: unknown[]) => insertFindings(...args),
+  insertHitlItem: (...args: unknown[]) => insertHitlItem(...args),
   finishReview: (...args: unknown[]) => finishReview(...args),
   failReview: (...args: unknown[]) => failReview(...args),
   findPostedReviewByHead: (...args: unknown[]) => findPostedReviewByHead(...args),
@@ -115,6 +117,7 @@ describe("handleReviewJob", () => {
   beforeEach(() => {
     insertReviewRunning.mockReset();
     insertFindings.mockReset();
+    insertHitlItem.mockReset();
     finishReview.mockReset();
     failReview.mockReset();
     findPostedReviewByHead.mockReset();
@@ -135,6 +138,7 @@ describe("handleReviewJob", () => {
 
     getDb.mockReturnValue({});
     insertReviewRunning.mockResolvedValue("review-1");
+    insertHitlItem.mockResolvedValue("hitl-1");
     findPostedReviewByHead.mockResolvedValue(null);
     setGithubReviewId.mockResolvedValue(undefined);
     emitAgentEvent.mockResolvedValue("evt-1");
@@ -259,6 +263,60 @@ describe("handleReviewJob", () => {
         githubReviewId: undefined,
       }),
     );
+  });
+
+  it("inserts hitl_items when outcome is hitl_queue", async () => {
+    await handleReviewJob(job);
+
+    expect(insertHitlItem).toHaveBeenCalledWith({}, "review-1");
+  });
+
+  it("inserts hitl_items when outcome is critical_escalate", async () => {
+    runReviewGraph.mockResolvedValue({
+      result: {
+        reviewId: "review-1",
+        prNumber: 3,
+        repo: "acme/api",
+        findings: [
+          {
+            ...sampleFinding,
+            severity: "CRITICAL",
+            category: "rce",
+          },
+        ],
+        overallConfidence: 0.95,
+        outcome: "critical_escalate",
+        summaryMarkdown: "critical",
+      },
+      agentTimings: [],
+      totalCostUsd: 0,
+    });
+
+    await handleReviewJob(job);
+
+    expect(insertHitlItem).toHaveBeenCalledWith({}, "review-1");
+    expect(postPullRequestReview).not.toHaveBeenCalled();
+  });
+
+  it("does not insert hitl_items on auto_post", async () => {
+    runReviewGraph.mockResolvedValue({
+      result: {
+        reviewId: "review-1",
+        prNumber: 3,
+        repo: "acme/api",
+        findings: [sampleFinding],
+        overallConfidence: 0.95,
+        outcome: "auto_post",
+        summaryMarkdown: "Looks good.",
+      },
+      agentTimings: [],
+      totalCostUsd: 0,
+    });
+    postPullRequestReview.mockResolvedValue({ githubReviewId: "gh-42" });
+
+    await handleReviewJob(job);
+
+    expect(insertHitlItem).not.toHaveBeenCalled();
   });
 
   it("posts to GitHub when outcome is auto_post and stores github_review_id", async () => {

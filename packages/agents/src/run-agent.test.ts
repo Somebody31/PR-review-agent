@@ -38,6 +38,29 @@ describe("buildUserMessage", () => {
     expect(message).toContain("# Repository context");
     expect(message).toContain("helpers.ts");
   });
+
+  it("masks PEM private keys that appear in untrusted PR text before LLM", () => {
+    const pem = [
+      "-----BEGIN RSA PRIVATE KEY-----",
+      "MIIEowIBAAKCAQEA1234567890secret",
+      "-----END RSA PRIVATE KEY-----",
+    ].join("\n");
+    const ctx: PrContext = {
+      ...sqlFixtureContext,
+      body: `see key\n${pem}`,
+    };
+    const message = buildUserMessage(ctx);
+    expect(message).toContain("[REDACTED_PRIVATE_KEY]");
+    expect(message).not.toContain("MIIEowIBAAKCAQEA");
+  });
+
+  it("only includes PR surface fields (no app secrets in message shape)", () => {
+    const message = buildUserMessage(sqlFixtureContext);
+    // Audit: LLM user message is built only from PR context, never config keys
+    expect(message).not.toMatch(/GITHUB_PRIVATE_KEY|GITHUB_WEBHOOK_SECRET|DEEPSEEK_API_KEY/);
+    expect(message).toContain("Title:");
+    expect(message).toContain("# Changed files");
+  });
 });
 
 describe("runSpecialistAgent", () => {

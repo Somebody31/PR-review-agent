@@ -33,3 +33,13 @@ export {
   type ReviewDetail,
   type HitlListItem,
 } from "./queries.js";
+export {
+  insertHitlItem,
+  getHitlItemById,
+  updateHitlState,
+  getFindingById,
+  listFindingsForReview,
+  insertHitlFeedback,
+  type HitlItemDetail,
+  type FindingRow,
+} from "./hitl.js";

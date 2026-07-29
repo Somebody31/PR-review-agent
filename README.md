@@ -12,14 +12,15 @@ GitHub PR → verify webhook → queue → LangGraph (four specialists: security
 ## Monorepo layout
 
 ```
-apps/api          Hono — webhooks + REST
+apps/api          Hono — webhooks + REST (HITL write + dispute)
 apps/worker       BullMQ + LangGraph review
 packages/shared   Zod contracts
-packages/core     config + logger + queue helpers
+packages/core     config + logger + queue + secret mask
 packages/db       Drizzle + pgvector schema
 packages/github   Webhook HMAC, App auth, PR context
 packages/agents   DeepSeek LLM, prompts, LangGraph graph
 packages/memory   Chunk, hash, Qwen embed, index, retrieve
+packages/evaluation  Golden fixtures + offline eval gate
 ```
 
 ## Quick start
@@ -31,6 +32,9 @@ pnpm install
 # Typecheck & tests
 pnpm typecheck
 pnpm test
+
+# Offline golden eval (no LLM keys required)
+pnpm eval
 
 # Infra (requires Docker)
 docker compose up -d
@@ -58,17 +62,31 @@ Local Qwen embed server is **not** in docker-compose — start it separately bef
 | **5** | Memory & RAG | **Done** (chunk/hash, local Qwen embed, incremental index, vector retrieve → `repoContext`) |
 | **6** | Posting & reliability | **Done** (`withRetry`, GitHub PR review post, idempotent by head SHA) |
 | **7** | Events, budget, REST | **Done** (`agent_events`, BudgetGuard UTC day, REST read API; no Next.js) |
-| 8+ | HITL write, security, evals, CI | Not started |
+| **8** | HITL write, security, evals | **Done** (HITL approve/reject, dispute, secret mask, golden eval) |
 
-**Next:** Phase **8** — HITL approve/reject writes (no Phase 7 dashboard shell).
+**Next:** Phase **9** — CI/CD polish & ops.
+
+### Phase 8 notes
+
+- **HITL queue:** worker inserts `hitl_items` when outcome is `hitl_queue` or `critical_escalate` (no auto post).
+- REST (Bearer `API_AUTH_TOKEN`):
+  - `GET /api/hitl` — list queue
+  - `POST /api/hitl/:id/approve` — post review to GitHub, mark approved
+  - `POST /api/hitl/:id/reject` — close without post (optional JSON `{ "comment" }`)
+  - `POST /api/findings/:id/dispute` — store `hitl_feedback` only (no auto prompt change)
+- **Security:** `maskSecrets()` redacts PEM keys / GitHub tokens / `sk-` keys / Bearer tokens in logs, agent event error payloads, and LLM user messages. App secrets (`GITHUB_PRIVATE_KEY`, webhook secret) are never put into LLM prompts — only PR title/body/diff/RAG context. Webhook path is HMAC-verified, delivery-idempotent, and lightly rate-limited per IP (60/min). Local threat model: `docs/SECURITY.md` (not in git).
+- **HITL approve/reject:** claim `pending→approved|rejected` **before** any GitHub post (approve) so concurrent reject cannot leave a post while HITL is rejected. Idempotent by head SHA (reuses `github_review_id`). Retries when HITL is already approved/rejected still call `finishReview` if `pr_reviews` is stuck `hitl_pending`. Finish sets `outcome=auto_post` (approve) or `hitl_rejected` (reject) with `status=completed`.
+- **Dispute / learning (8.2):** single disputes are stored only — **no** automatic prompt or policy mutation. Future continuous learning (Phase 9) must require a **minimum evidence threshold** before any change (suggested baseline: ≥5 disputes for the same agent+category within 30 days, plus human review of the batch). One-off or sparse disputes never auto-tune.
+- **Eval:** `packages/evaluation` has 6 synthetic fixture diffs + specialist prompt contract checks; `pnpm eval` fails if precision/recall fall below thresholds (default P≥0.7, R≥0.8) **or** a specialist prompt loses required focus language.
+- **Auto-post:** keep `AUTO_POST_ENABLED=false` until golden eval is green on your prompts/model **and** you accept HITL rate in staging. Enable only after monitoring dispute rate; CRITICAL still escalates regardless.
+- No Next.js (ADR-009).
 
 ### Phase 7 notes
 
 - `emitAgentEvent` + helpers in `@pr-review/db`; timeline queryable by `review_id`.
 - Worker emits `review_start` / `review_end` / `review_failed` / `github_post`; agents emit `agent_start` / `llm_call` / `agent_end` / `aggregate`.
 - **BudgetGuard:** sums billable `cost_usd` on **`llm_call` only** for the **UTC calendar day** (not `agent_end` / `review_end`); before each LLM call if `spent + estimate > DAILY_BUDGET_USD` → budget error, review `failed`, `budget_block` event.
-- REST (Bearer `API_AUTH_TOKEN`): `GET /api/reviews`, `/api/reviews/:id`, `/api/reviews/:id/events`, `/api/economics/summary`, `/api/hitl` (list only).
-- No Next.js dashboard (ADR-009 / user lock). HITL approve/reject writes deferred to Phase 8.
+- REST (Bearer `API_AUTH_TOKEN`): `GET /api/reviews`, `/api/reviews/:id`, `/api/reviews/:id/events`, `/api/economics/summary`, `/api/hitl`.
 
 ### Phase 6 notes
 

@@ -155,7 +155,7 @@ export async function getReviewById(
 }
 
 /**
- * List HITL queue items (read-only for Phase 7). Newest first.
+ * List HITL queue items. Newest first.
  */
 export async function listHitlItems(
   db: Database,

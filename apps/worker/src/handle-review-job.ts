@@ -6,7 +6,7 @@ import {
   type AgentHookEvent,
   type ReviewHooks,
 } from "@pr-review/agents";
-import { createLogger, loadConfig, withRetry } from "@pr-review/core";
+import { createLogger, loadConfig, maskSecrets, withRetry } from "@pr-review/core";
 import {
   emitAgentEvent,
   failReview,
@@ -14,6 +14,7 @@ import {
   finishReview,
   getDb,
   insertFindings,
+  insertHitlItem,
   insertReviewRunning,
   setGithubReviewId,
   statusForOutcome,
@@ -153,6 +154,15 @@ export async function handleReviewJob(job: ReviewJob): Promise<void> {
       files: context.files,
     });
 
+    // Human must approve/reject before post when gated
+    if (
+      result.outcome === "hitl_queue" ||
+      result.outcome === "critical_escalate"
+    ) {
+      const hitlId = await insertHitlItem(db, reviewId);
+      logger.info({ reviewId, hitlId, outcome: result.outcome }, "HITL item queued");
+    }
+
     const costUsd =
       graphOutput.totalCostUsd > 0 ? String(graphOutput.totalCostUsd) : undefined;
 
@@ -192,9 +202,11 @@ export async function handleReviewJob(job: ReviewJob): Promise<void> {
     );
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : String(error);
+    // Mask before log / event payload so stack text cannot leak keys
+    const safeMessage = maskSecrets(message);
     const isBudget = isBudgetExceededError(error);
 
-    await failReview(db, reviewId, message);
+    await failReview(db, reviewId, safeMessage);
 
     // budget_block is already emitted by checkBudget; always close the timeline with review_failed
     await emitAgentEvent(db, {
@@ -203,7 +215,7 @@ export async function handleReviewJob(job: ReviewJob): Promise<void> {
       agent: "worker",
       outcome: "failed",
       payload: {
-        error: message.slice(0, 500),
+        error: safeMessage.slice(0, 500),
         budgetExceeded: isBudget,
         ...(isBudget
           ? {
@@ -215,7 +227,7 @@ export async function handleReviewJob(job: ReviewJob): Promise<void> {
       },
     });
 
-    logger.error({ reviewId, err: message, budget: isBudget }, "review failed");
+    logger.error({ reviewId, err: safeMessage, budget: isBudget }, "review failed");
     throw error;
   }
 }
@@ -382,8 +394,9 @@ async function loadRepoContext(args: {
     return formatted;
   } catch (ragError: unknown) {
     const message = ragError instanceof Error ? ragError.message : String(ragError);
+    const safeMessage = maskSecrets(message);
     logger.warn(
-      { reviewId: args.reviewId, err: message },
+      { reviewId: args.reviewId, err: safeMessage },
       "RAG skipped; continuing with diff only",
     );
     return "";

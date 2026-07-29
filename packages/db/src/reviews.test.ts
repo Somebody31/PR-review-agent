@@ -24,6 +24,8 @@ describe("review helpers", () => {
     expect(statusForOutcome("auto_post")).toBe("completed");
     expect(statusForOutcome("hitl_queue")).toBe("hitl_pending");
     expect(statusForOutcome("critical_escalate")).toBe("hitl_pending");
+    // Human reject is terminal completed (not left in the HITL queue)
+    expect(statusForOutcome("hitl_rejected")).toBe("completed");
   });
 });
 

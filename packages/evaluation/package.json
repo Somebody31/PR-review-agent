@@ -1,5 +1,5 @@
 {
-  "name": "@pr-review/agents",
+  "name": "@pr-review/evaluation",
   "version": "0.0.1",
   "private": true,
   "type": "module",
@@ -15,18 +15,16 @@
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run",
+    "eval": "tsx src/run-eval.ts",
     "lint": "echo \"no lint config yet\""
   },
-  "dependencies": {
-    "@langchain/core": "^0.3.42",
-    "@langchain/langgraph": "^0.2.54",
-    "@pr-review/core": "workspace:*",
-    "@pr-review/github": "workspace:*",
-    "@pr-review/shared": "workspace:*",
-    "zod": "^3.24.2"
-  },
   "devDependencies": {
+    "tsx": "^4.19.3",
     "typescript": "^5.8.2",
     "vitest": "^3.0.9"
+  },
+  "dependencies": {
+    "@pr-review/agents": "workspace:^",
+    "@pr-review/shared": "workspace:^"
   }
 }
