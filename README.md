@@ -63,8 +63,15 @@ Local Qwen embed server is **not** in docker-compose — start it separately bef
 | **6** | Posting & reliability | **Done** (`withRetry`, GitHub PR review post, idempotent by head SHA) |
 | **7** | Events, budget, REST | **Done** (`agent_events`, BudgetGuard UTC day, REST read API; no Next.js) |
 | **8** | HITL write, security, evals | **Done** (HITL approve/reject, dispute, secret mask, golden eval) |
+| **9** | CI & ops | **Done** (GitHub Actions CI, runbook, light learning hooks notes) |
 
-**Next:** Phase **9** — CI/CD polish & ops.
+**MVP phases 0–9 complete** (REST-first; no Next.js dashboard).
+
+### Phase 9 notes
+
+- **CI:** `.github/workflows/ci.yml` runs `pnpm install --frozen-lockfile`, `pnpm typecheck`, `pnpm test`, and `pnpm eval` on push/PR to `master`/`main`.
+- **Runbook:** see [Operations runbook](#operations-runbook) below.
+- **Learning hooks (light):** weekly dispute/rejection rates by agent via SQL on `hitl_feedback` / `agent_events` (documented in runbook). Prompt changes require a new prompt version + green `pnpm eval` before promote. No automatic prompt mutation from a single dispute.
 
 ### Phase 8 notes
 
@@ -104,6 +111,106 @@ Local Qwen embed server is **not** in docker-compose — start it separately bef
 - Worker indexes changed PR files when content hash changes; soft-fails if the embed server is down (diff-only review still runs).
 - Retrieved chunks are injected into specialist prompts under repository context.
 - Embeddings: OpenAI-compatible `POST {EMBEDDING_BASE_URL}/embeddings` (default Qwen3 local).
+
+## Operations runbook
+
+### Fresh environment
+
+```bash
+# 1. Clone + install
+git clone git@github.com:Somebody31/PR-review-agent.git
+cd PR-review-agent
+pnpm install
+
+# 2. Infra
+docker compose up -d
+cp .env.example .env
+# Edit .env: DATABASE_URL, REDIS_URL, GITHUB_*, DEEPSEEK_API_KEY, API_AUTH_TOKEN
+
+# 3. Schema
+pnpm db:migrate
+
+# 4. Processes
+pnpm --filter @pr-review/api dev
+pnpm --filter @pr-review/worker dev
+
+# 5. Optional RAG (local Qwen OpenAI-compatible embeddings)
+# Point EMBEDDING_BASE_URL at your server (default http://127.0.0.1:8000/v1)
+```
+
+### Env checklist
+
+| Variable | Required for |
+|----------|----------------|
+| `DATABASE_URL` | API + worker |
+| `REDIS_URL` | API enqueue + worker |
+| `GITHUB_WEBHOOK_SECRET` | Webhook HMAC |
+| `GITHUB_APP_ID` / `GITHUB_PRIVATE_KEY` | PR fetch + post |
+| `DEEPSEEK_API_KEY` | Agents |
+| `API_AUTH_TOKEN` | REST / HITL mutations |
+| `AUTO_POST_ENABLED` | Default `false` — keep off until eval + staging OK |
+| `HITL_CONFIDENCE_THRESHOLD` | Default `0.75` |
+| `DAILY_BUDGET_USD` | Default `20` (UTC day, `llm_call` costs) |
+| `EMBEDDING_*` | RAG only (soft-fail if down) |
+
+### Scale workers
+
+- Start more worker processes with the same `REDIS_URL` / `DATABASE_URL`.
+- BullMQ concurrency defaults low (1) in worker bootstrap — raise carefully vs LLM budget.
+
+### Rotate GitHub webhook secret
+
+1. Generate a new secret in the GitHub App / webhook settings.
+2. Set `GITHUB_WEBHOOK_SECRET` on the API and restart.
+3. Old deliveries already stored by id stay idempotent; no DB wipe needed.
+
+### Replay failed jobs
+
+- Inspect BullMQ failed set (Redis) or re-deliver the webhook from GitHub (same `X-GitHub-Delivery` is ignored as duplicate — use a new delivery or delete that row only if you intend a full re-run).
+- For a new review of the same PR head, push a new commit (new head SHA) or clear `github_review_id` only when you knowingly accept a second post.
+
+### HITL ops
+
+```bash
+# List queue
+curl -s -H "Authorization: Bearer $API_AUTH_TOKEN" http://localhost:3000/api/hitl
+
+# Approve (posts to GitHub when not already posted for that head)
+curl -s -X POST -H "Authorization: Bearer $API_AUTH_TOKEN" \
+  http://localhost:3000/api/hitl/<hitlId>/approve
+
+# Reject (no GitHub post)
+curl -s -X POST -H "Authorization: Bearer $API_AUTH_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"comment":"not useful"}' \
+  http://localhost:3000/api/hitl/<hitlId>/reject
+```
+
+### Budget tripped
+
+- Review `agent_events` with `event_type = 'budget_block'` and `llm_call` costs for the UTC day.
+- Raise `DAILY_BUDGET_USD` or wait until next UTC day; failed reviews stay `failed`.
+
+### Weekly learning query (manual)
+
+```sql
+-- Dispute rate by agent (last 7 days)
+SELECT f.agent_type, count(*) AS disputes
+FROM hitl_feedback fb
+JOIN findings f ON f.id = fb.finding_id
+WHERE fb.action = 'dispute'
+  AND fb.created_at > now() - interval '7 days'
+GROUP BY f.agent_type
+ORDER BY disputes DESC;
+```
+
+Promote a prompt change only after: new version in agents prompts + green `pnpm eval` + review of disputes (≥5 same agent+category / 30 days suggested).
+
+### Health
+
+```bash
+curl -s http://localhost:3000/health
+```
 
 ## License
 
