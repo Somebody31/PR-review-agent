@@ -218,6 +218,4 @@ ORDER BY disputes DESC;
 
 ---
 
-## License
 
-Private repository. License TBD.
