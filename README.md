@@ -7,13 +7,14 @@ GitHub PR → verify webhook → queue → LangGraph (four specialists: security
 **Chat model:** DeepSeek V4 Flash (official API)  
 **Embeddings:** Qwen3 Embedding (local OpenAI-compatible server)  
 **Orchestration:** LangGraph.js  
-**UI:** deferred (REST-first HITL; no Next.js in MVP)
+**UI:** Next.js ops dashboard (`apps/web`) — server-side REST client (token never in browser)
 
 ## Monorepo layout
 
 ```
 apps/api          Hono — webhooks + REST (HITL write + dispute)
 apps/worker       BullMQ + LangGraph review
+apps/web          Next.js dashboard (reviews, HITL, trace, economics)
 packages/shared   Zod contracts
 packages/core     config + logger + queue + secret mask
 packages/db       Drizzle + pgvector schema
@@ -46,6 +47,10 @@ cp .env.example .env
 # API + worker (needs DATABASE_URL + REDIS_URL + secrets)
 pnpm --filter @pr-review/api dev
 pnpm --filter @pr-review/worker dev
+
+# Dashboard (port 3001) — needs API running + same API_AUTH_TOKEN
+pnpm dev:web
+# Or all three: pnpm dev:all
 ```
 
 Local Qwen embed server is **not** in docker-compose — start it separately before RAG (Phase 5).
@@ -61,11 +66,20 @@ Local Qwen embed server is **not** in docker-compose — start it separately bef
 | **4** | Agents & LangGraph | **Done** |
 | **5** | Memory & RAG | **Done** (chunk/hash, local Qwen embed, incremental index, vector retrieve → `repoContext`) |
 | **6** | Posting & reliability | **Done** (`withRetry`, GitHub PR review post, idempotent by head SHA) |
-| **7** | Events, budget, REST | **Done** (`agent_events`, BudgetGuard UTC day, REST read API; no Next.js) |
+| **7** | Events, budget, REST | **Done** (`agent_events`, BudgetGuard UTC day, REST read API) |
 | **8** | HITL write, security, evals | **Done** (HITL approve/reject, dispute, secret mask, golden eval) |
 | **9** | CI & ops | **Done** (GitHub Actions CI, runbook, light learning hooks notes) |
+| **10** | Dashboard UI | **Done** (Next.js `apps/web`: reviews, HITL, trace, economics) |
 
-**MVP phases 0–9 complete** (REST-first; no Next.js dashboard).
+**MVP backend 0–9 + thin dashboard (Phase 10).** Agent loop remains API + worker; UI is a server-side client of the REST API.
+
+### Phase 10 notes
+
+- **App:** `apps/web` (Next.js App Router) on port **3001**.
+- **Pages:** `/` reviews list · `/reviews/[id]` findings + dispute · `/reviews/[id]/trace` event timeline · `/hitl` approve/reject · `/economics` cost tables.
+- **Auth:** server-only `API_AUTH_TOKEN` + `API_BASE_URL` (never sent to the browser). Mutations use Server Actions → REST.
+- **Boundary:** dashboard talks to Hono REST only (no direct DB from Next). Prefer `pnpm --filter @pr-review/api dev` before opening the UI.
+- No GitHub OAuth yet (token-in-env for ops); no chart library (tables only).
 
 ### Phase 9 notes
 
@@ -86,7 +100,7 @@ Local Qwen embed server is **not** in docker-compose — start it separately bef
 - **Dispute / learning (8.2):** single disputes are stored only — **no** automatic prompt or policy mutation. Future continuous learning (Phase 9) must require a **minimum evidence threshold** before any change (suggested baseline: ≥5 disputes for the same agent+category within 30 days, plus human review of the batch). One-off or sparse disputes never auto-tune.
 - **Eval:** `packages/evaluation` has 6 synthetic fixture diffs + specialist prompt contract checks; `pnpm eval` fails if precision/recall fall below thresholds (default P≥0.7, R≥0.8) **or** a specialist prompt loses required focus language.
 - **Auto-post:** keep `AUTO_POST_ENABLED=false` until golden eval is green on your prompts/model **and** you accept HITL rate in staging. Enable only after monitoring dispute rate; CRITICAL still escalates regardless.
-- No Next.js (ADR-009).
+- Dashboard was deferred in MVP (ADR-009); shipped later as Phase 10.
 
 ### Phase 7 notes
 
@@ -133,6 +147,7 @@ pnpm db:migrate
 # 4. Processes
 pnpm --filter @pr-review/api dev
 pnpm --filter @pr-review/worker dev
+pnpm dev:web   # dashboard http://127.0.0.1:3001
 
 # 5. Optional RAG (local Qwen OpenAI-compatible embeddings)
 # Point EMBEDDING_BASE_URL at your server (default http://127.0.0.1:8000/v1)
@@ -147,7 +162,8 @@ pnpm --filter @pr-review/worker dev
 | `GITHUB_WEBHOOK_SECRET` | Webhook HMAC |
 | `GITHUB_APP_ID` / `GITHUB_PRIVATE_KEY` | PR fetch + post |
 | `DEEPSEEK_API_KEY` | Agents |
-| `API_AUTH_TOKEN` | REST / HITL mutations |
+| `API_AUTH_TOKEN` | REST / HITL mutations + web server |
+| `API_BASE_URL` | Web dashboard → API (default `http://127.0.0.1:3000`) |
 | `AUTO_POST_ENABLED` | Default `false` — keep off until eval + staging OK |
 | `HITL_CONFIDENCE_THRESHOLD` | Default `0.75` |
 | `DAILY_BUDGET_USD` | Default `20` (UTC day, `llm_call` costs) |

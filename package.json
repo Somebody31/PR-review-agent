@@ -10,6 +10,8 @@
   "scripts": {
     "build": "pnpm -r run build",
     "dev": "pnpm --parallel --filter @pr-review/api --filter @pr-review/worker run dev",
+    "dev:web": "pnpm --filter @pr-review/web dev",
+    "dev:all": "pnpm --parallel --filter @pr-review/api --filter @pr-review/worker --filter @pr-review/web run dev",
     "test": "pnpm -r run test",
     "lint": "pnpm -r run lint",
     "typecheck": "pnpm --filter @pr-review/shared --filter @pr-review/core --filter @pr-review/db --filter @pr-review/github --filter @pr-review/agents --filter @pr-review/memory --filter @pr-review/evaluation run build && pnpm -r run typecheck",
